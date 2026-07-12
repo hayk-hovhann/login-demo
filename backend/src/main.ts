@@ -15,9 +15,9 @@ async function bootstrap() {
       resave: false,
       saveUninitialized: false,
       cookie: {
-        httpOnly: true,                                  // JS can't read the cookie
-        secure: process.env.COOKIE_SECURE === 'true',    // true only behind HTTPS
-        maxAge: 1000 * 60 * 60,                           // 1 hour
+        httpOnly: true, // JS can't read the cookie
+        secure: process.env.COOKIE_SECURE === 'true', // true only behind HTTPS
+        maxAge: 1000 * 60 * 60, // 1 hour
       },
     }),
   );
@@ -26,4 +26,4 @@ async function bootstrap() {
   await app.listen(port, '0.0.0.0');
   console.log(`Backend listening on :${port}`);
 }
-bootstrap();
+void bootstrap();

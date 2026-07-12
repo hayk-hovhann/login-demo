@@ -1,0 +1,62 @@
+name: backend CI
+
+# Run only when backend files change (path filter = the monorepo payoff).
+# Runs on PRs into main (the gate) and on pushes to main (post-merge sanity).
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/backend.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/backend.yml'
+
+# Cancel an in-progress run if you push again to the same branch/PR.
+concurrency:
+  group: backend-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend      # every `run:` executes inside backend/
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install deps
+        run: npm ci                       # reproducible install from the lockfile
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Docker build
+        run: docker build -t login-demo-backend:ci .
+
+      # docker scout: image vulnerability scan (finally running it for real).
+      # continue-on-error so a CVE finding surfaces but doesn't fail the build yet.
+      - name: Docker Scout (CVE quickview)
+        continue-on-error: true
+        uses: docker/scout-action@v1
+        with:
+          command: quickview,cves
+          image: login-demo-backend:ci
+          only-severities: critical,high

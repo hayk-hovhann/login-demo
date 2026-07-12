@@ -2,11 +2,8 @@
 FROM node:20-alpine AS build
 WORKDIR /app
 COPY package*.json ./
-# npm install works with or without a lockfile; switch to `npm ci` in CI
-# once package-lock.json is committed (reproducible installs).
-RUN npm install
-COPY tsconfig.json nest-cli.json ./
-COPY src ./src
+RUN npm ci
+COPY . .
 RUN npm run build && npm prune --omit=dev
 
 # ---- runtime stage ----
