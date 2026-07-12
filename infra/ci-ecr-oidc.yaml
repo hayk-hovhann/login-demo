@@ -1,0 +1,139 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'login-demo Stage 3 — ECR repos + GitHub OIDC push role (durable foundation, deploy once)'
+
+Parameters:
+  GitHubOrg:
+    Type: String
+    Default: 'hayk-hovhann'
+    Description: 'GitHub account/org that owns the repo.'
+  GitHubRepo:
+    Type: String
+    Default: 'login-demo'
+    Description: 'Repository name.'
+
+Resources:
+
+  # ---------- ECR repositories (one per service) ----------
+  BackendRepo:
+    Type: 'AWS::ECR::Repository'
+    Properties:
+      RepositoryName: 'login-demo-backend'
+      ImageTagMutability: MUTABLE          # allow re-pushing :latest
+      ImageScanningConfiguration:
+        ScanOnPush: true                   # free basic CVE scan on every push
+      # Lifecycle policy = cost hygiene: keep only the 10 most recent images,
+      # expire the rest so storage never piles up.
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep last 10 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 10
+                },
+                "action": { "type": "expire" }
+              }
+            ]
+          }
+
+  FrontendRepo:
+    Type: 'AWS::ECR::Repository'
+    Properties:
+      RepositoryName: 'login-demo-frontend'
+      ImageTagMutability: MUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep last 10 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 10
+                },
+                "action": { "type": "expire" }
+              }
+            ]
+          }
+
+  # ---------- GitHub OIDC identity provider ----------
+  # Registers GitHub's token issuer as something this AWS account trusts.
+  # One provider per account; if you already created one for another repo,
+  # delete this resource and reference the existing ARN instead.
+  GitHubOIDCProvider:
+    Type: 'AWS::IAM::OIDCProvider'
+    Properties:
+      Url: 'https://token.actions.githubusercontent.com'
+      ClientIdList:
+        - 'sts.amazonaws.com'
+      ThumbprintList:
+        # GitHub's OIDC thumbprint. AWS now validates the cert chain itself,
+        # so this value is effectively a formality, but the field is required.
+        - '6938fd4d98bab03faadb97b34396831e3780aea1'
+
+  # ---------- The role GitHub Actions will assume ----------
+  GitHubActionsPushRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: 'login-demo-github-actions-ecr'
+      # TRUST POLICY = WHO may assume this role.
+      # Here: a GitHub Actions workflow, proven via the OIDC token, but ONLY
+      # from this specific repo. The StringLike on `sub` scopes it tightly.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref GitHubOIDCProvider
+            Action: 'sts:AssumeRoleWithWebIdentity'
+            Condition:
+              StringEquals:
+                'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com'
+              StringLike:
+                # Restricted to the main branch only: only a workflow run ON main
+                # may assume this role and push to ECR. A feature-branch or PR run
+                # that tried to push would be denied by AWS itself (defense in depth,
+                # matching the pipeline rule "push images only on merge to main").
+                'token.actions.githubusercontent.com:sub': !Sub 'repo:${GitHubOrg}/${GitHubRepo}:ref:refs/heads/main'
+      # PERMISSIONS POLICY = WHAT the role may do once assumed.
+      Policies:
+        - PolicyName: 'ecr-push'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # GetAuthorizationToken is account-level -> must be Resource: '*'
+              - Effect: Allow
+                Action: 'ecr:GetAuthorizationToken'
+                Resource: '*'
+              # The actual push/pull actions, scoped to just these two repos.
+              - Effect: Allow
+                Action:
+                  - 'ecr:BatchCheckLayerAvailability'
+                  - 'ecr:InitiateLayerUpload'
+                  - 'ecr:UploadLayerPart'
+                  - 'ecr:CompleteLayerUpload'
+                  - 'ecr:PutImage'
+                  - 'ecr:BatchGetImage'
+                  - 'ecr:GetDownloadUrlForLayer'
+                Resource:
+                  - !GetAtt BackendRepo.Arn
+                  - !GetAtt FrontendRepo.Arn
+
+Outputs:
+  BackendRepoUri:
+    Description: 'Backend ECR repo URI (use as the image base in the workflow / task def)'
+    Value: !GetAtt BackendRepo.RepositoryUri
+  FrontendRepoUri:
+    Description: 'Frontend ECR repo URI'
+    Value: !GetAtt FrontendRepo.RepositoryUri
+  GitHubActionsRoleArn:
+    Description: 'Role ARN for the GitHub workflow role-to-assume'
+    Value: !GetAtt GitHubActionsPushRole.Arn
