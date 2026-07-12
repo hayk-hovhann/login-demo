@@ -1,7 +1,5 @@
 name: backend CI
 
-# Run only when backend files change (path filter = the monorepo payoff).
-# Runs on PRs into main (the gate) and on pushes to main (post-merge sanity).
 on:
   pull_request:
     branches: [main]
@@ -14,17 +12,17 @@ on:
       - 'backend/**'
       - '.github/workflows/backend.yml'
 
-# Cancel an in-progress run if you push again to the same branch/PR.
 concurrency:
   group: backend-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # ---------- CI: runs on PRs and on main ----------
   build:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: backend      # every `run:` executes inside backend/
+        working-directory: backend
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -37,7 +35,7 @@ jobs:
           cache-dependency-path: backend/package-lock.json
 
       - name: Install deps
-        run: npm ci                       # reproducible install from the lockfile
+        run: npm ci
 
       - name: Lint
         run: npm run lint
@@ -51,8 +49,6 @@ jobs:
       - name: Docker build
         run: docker build -t login-demo-backend:ci .
 
-      # docker scout: image vulnerability scan (finally running it for real).
-      # continue-on-error so a CVE finding surfaces but doesn't fail the build yet.
       - name: Docker Scout (CVE quickview)
         continue-on-error: true
         uses: docker/scout-action@v1
@@ -60,3 +56,36 @@ jobs:
           command: quickview,cves
           image: login-demo-backend:ci
           only-severities: critical,high
+
+  # ---------- CD: build + push image to ECR, ONLY on main ----------
+  push:
+    needs: build                              # only runs if build passed
+    if: github.ref == 'refs/heads/main'       # only on main (not PRs)
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write                         # required for OIDC (mint the token)
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          REPO: login-demo-backend
+          SHA: ${{ github.sha }}
+        run: |
+          docker build -t "$REGISTRY/$REPO:$SHA" -t "$REGISTRY/$REPO:latest" ./backend
+          docker push "$REGISTRY/$REPO:$SHA"
+          docker push "$REGISTRY/$REPO:latest"
+          echo "Pushed $REGISTRY/$REPO:$SHA and :latest"
