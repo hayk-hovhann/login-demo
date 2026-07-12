@@ -1,0 +1,19 @@
+# Local one-origin dev: nginx (frontend) serves the UI and proxies /api -> backend.
+# Browse http://localhost:8080  — the browser only ever sees ONE origin, so the
+# session cookie works with no CORS setup.
+services:
+  backend:
+    build: ./backend
+    environment:
+      - PORT=3000
+      - SESSION_SECRET=dev-secret-change-me
+      - COOKIE_SECURE=false          # true only when served over HTTPS
+    expose:
+      - "3000"                       # visible to other compose services, not the host
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:80"                    # http://localhost:8080
+    depends_on:
+      - backend
