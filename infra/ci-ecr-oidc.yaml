@@ -135,6 +135,8 @@ Resources:
             Statement:
               - Effect: Allow
                 Action:
+                  - 'ecs:ListClusters'             # locate step: find the cluster
+                  - 'ecs:ListServices'             # locate step: find the service
                   - 'ecs:DescribeServices'
                   - 'ecs:DescribeTaskDefinition'
                   - 'ecs:RegisterTaskDefinition'   # register a new revision
