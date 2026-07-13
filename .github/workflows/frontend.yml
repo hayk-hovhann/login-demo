@@ -89,3 +89,90 @@ jobs:
           docker push "$REGISTRY/$REPO:$SHA"
           docker push "$REGISTRY/$REPO:latest"
           echo "Pushed $REGISTRY/$REPO:$SHA and :latest"
+
+  # ---------- CD: deploy the new image to ECS (SHA-pinned), ONLY on main ----------
+  deploy:
+    needs: push                               # only after the image is in ECR
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write                         # OIDC
+      contents: read
+    env:
+      CLUSTER: login-demo-app-Cluster          # NOTE: cluster name changes per stack recreate; see comment below
+      SERVICE_PREFIX: login-demo-app-FrontendService
+      CONTAINER: frontend
+      REPO: login-demo-frontend
+      SHA: ${{ github.sha }}
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      # The ephemeral app stack may be torn down. Find the running cluster/service;
+      # if none exists, skip the deploy gracefully (don't fail the pipeline).
+      - name: Locate running cluster + service
+        id: locate
+        run: |
+          set -euo pipefail
+          # find a cluster whose name starts with our prefix and is ACTIVE
+          CLUSTER_ARN=$(aws ecs list-clusters --query "clusterArns[?contains(@,'login-demo-app-Cluster')]|[0]" --output text)
+          if [ "$CLUSTER_ARN" = "None" ] || [ -z "$CLUSTER_ARN" ]; then
+            echo "No app cluster found — stack is torn down. Skipping deploy."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          SERVICE_ARN=$(aws ecs list-services --cluster "$CLUSTER_ARN" \
+            --query "serviceArns[?contains(@,'${SERVICE_PREFIX}')]|[0]" --output text)
+          if [ "$SERVICE_ARN" = "None" ] || [ -z "$SERVICE_ARN" ]; then
+            echo "No frontend service found — skipping deploy."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "cluster=$CLUSTER_ARN" >> "$GITHUB_OUTPUT"
+          echo "service=$SERVICE_ARN" >> "$GITHUB_OUTPUT"
+
+      - name: Register new task def revision (pinned to this SHA) and deploy
+        if: steps.locate.outputs.found == 'true'
+        env:
+          REGISTRY: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com
+          CLUSTER_ARN: ${{ steps.locate.outputs.cluster }}
+          SERVICE_ARN: ${{ steps.locate.outputs.service }}
+        run: |
+          set -euo pipefail
+          NEW_IMAGE="$REGISTRY/$REPO:$SHA"
+          echo "Deploying image: $NEW_IMAGE"
+
+          # 1) get the task-def ARN the service currently runs
+          TD_ARN=$(aws ecs describe-services --cluster "$CLUSTER_ARN" --services "$SERVICE_ARN" \
+            --query "services[0].taskDefinition" --output text)
+
+          # 2) fetch that task def as JSON
+          aws ecs describe-task-definition --task-definition "$TD_ARN" \
+            --query "taskDefinition" > td.json
+
+          # 3) swap the container image to the new SHA, and strip read-only /
+          #    server-populated fields that register-task-definition rejects.
+          jq --arg IMG "$NEW_IMAGE" --arg NAME "$CONTAINER" '
+            .containerDefinitions |= map(if .name == $NAME then .image = $IMG else . end)
+            | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
+                  .compatibilities, .registeredAt, .registeredBy,
+                  .enableFaultInjection)
+          ' td.json > td-new.json
+
+          # 4) register the new revision
+          NEW_TD_ARN=$(aws ecs register-task-definition --cli-input-json file://td-new.json \
+            --query "taskDefinition.taskDefinitionArn" --output text)
+          echo "Registered: $NEW_TD_ARN"
+
+          # 5) roll the service to the new revision
+          aws ecs update-service --cluster "$CLUSTER_ARN" --service "$SERVICE_ARN" \
+            --task-definition "$NEW_TD_ARN" >/dev/null
+          echo "Service updated. ECS is rolling out $NEW_IMAGE"
+
+      - name: Note when skipped
+        if: steps.locate.outputs.found != 'true'
+        run: echo "App stack not running — image is in ECR and will deploy on next stack creation."

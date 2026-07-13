@@ -126,6 +126,28 @@ Resources:
                 Resource:
                   - !GetAtt BackendRepo.Arn
                   - !GetAtt FrontendRepo.Arn
+        # ---------- ECS deploy (Step 2: SHA-pinned rolling deploy) ----------
+        # Lets the deploy job read the live task def, register a new revision
+        # pinned to the new image SHA, and roll the service to it.
+        - PolicyName: 'ecs-deploy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ecs:DescribeServices'
+                  - 'ecs:DescribeTaskDefinition'
+                  - 'ecs:RegisterTaskDefinition'   # register a new revision
+                  - 'ecs:UpdateService'            # point the service at it
+                Resource: '*'
+              # RegisterTaskDefinition embeds the execution role, so the deploy
+              # identity must be allowed to PASS that role into ECS.
+              - Effect: Allow
+                Action: 'iam:PassRole'
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    'iam:PassedToService': 'ecs-tasks.amazonaws.com'
 
 Outputs:
   BackendRepoUri:
