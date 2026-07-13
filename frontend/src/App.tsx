@@ -34,7 +34,7 @@ export function App() {
   return (
     <div style={S.wrap}>
       <h1>Login demo</h1>
-      <p style={S.badge}>🚀 Stage 4 complete — running on ECS/Fargate behind an ALB</p>
+      <p style={S.badge}>🚀 Stage 4 complete — auto-deployed via CI/CD 🎉</p>
       {user ? (
         <>
           <p>

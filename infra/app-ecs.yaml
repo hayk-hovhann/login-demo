@@ -2,10 +2,14 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: 'login-demo Stage 4 — ECS/Fargate two services (frontend + backend) behind an ALB with path routing. EPHEMERAL: delete-stack when done.'
 
 Parameters:
-  ImageTag:
+  BackendImageTag:
     Type: String
     Default: 'latest'
-    Description: 'Image tag to deploy for BOTH services (e.g. latest or a git SHA).'
+    Description: 'Image tag for the BACKEND service (e.g. latest or the backend git SHA).'
+  FrontendImageTag:
+    Type: String
+    Default: 'latest'
+    Description: 'Image tag for the FRONTEND service (e.g. latest or the frontend git SHA). Each service has its OWN tag — a frontend commit SHA is not a valid backend tag.'
 
 Resources:
 
@@ -210,7 +214,7 @@ Resources:
       ExecutionRoleArn: !GetAtt 'TaskExecutionRole.Arn'
       ContainerDefinitions:
         - Name: backend
-          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/login-demo-backend:${ImageTag}'
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/login-demo-backend:${BackendImageTag}'
           Essential: true
           PortMappings:
             - ContainerPort: 3000
@@ -266,7 +270,7 @@ Resources:
       ExecutionRoleArn: !GetAtt 'TaskExecutionRole.Arn'
       ContainerDefinitions:
         - Name: frontend
-          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/login-demo-frontend:${ImageTag}'
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/login-demo-frontend:${FrontendImageTag}'
           Essential: true
           PortMappings:
             - ContainerPort: 80
