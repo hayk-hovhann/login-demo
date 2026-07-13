@@ -34,6 +34,7 @@ export function App() {
   return (
     <div style={S.wrap}>
       <h1>Login demo</h1>
+      <p style={S.badge}>🚀 Stage 4 complete — running on ECS/Fargate behind an ALB</p>
       {user ? (
         <>
           <p>
@@ -70,5 +71,13 @@ const S = {
     fontFamily: 'system-ui, sans-serif',
     maxWidth: 320,
     margin: '4rem auto',
+  } as React.CSSProperties,
+  badge: {
+    background: '#eef6ff',
+    border: '1px solid #cfe4ff',
+    borderRadius: 6,
+    padding: '6px 10px',
+    fontSize: 13,
+    color: '#1a4b8c',
   } as React.CSSProperties,
 };
