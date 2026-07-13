@@ -1,0 +1,54 @@
+name: infra CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'infra/**'
+      - '.github/workflows/infra.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'infra/**'
+      - '.github/workflows/infra.yml'
+
+concurrency:
+  group: infra-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Validate the CloudFormation templates so infra mistakes are caught in the
+  # PR — before anyone runs `cloudformation deploy`. This also means infra-only
+  # PRs now trigger a workflow (no more "orphan" PRs that match no path filter
+  # and deadlock on a required check that never reports).
+  build:                                   # named 'build' to match the required check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # cfn-lint = static analysis for CloudFormation: schema, valid resource
+      # properties, intrinsic-function usage, common mistakes. Catches far more
+      # than the AWS service-side validate-template call.
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install cfn-lint
+        run: pip install cfn-lint
+
+      - name: Lint CloudFormation templates
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          FOUND=0
+          for f in infra/*.yaml infra/*.yml; do
+            echo "::group::cfn-lint $f"
+            cfn-lint "$f"
+            echo "::endgroup::"
+            FOUND=1
+          done
+          if [ "$FOUND" -eq 0 ]; then
+            echo "No CloudFormation templates found under infra/ — nothing to lint."
+          fi
