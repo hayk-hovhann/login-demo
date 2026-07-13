@@ -34,7 +34,7 @@ export function App() {
   return (
     <div style={S.wrap}>
       <h1>Login demo</h1>
-      <p style={S.badge}>🚀 Stage 4 complete — auto-deployed via CI/CD · v2</p>
+      <p style={S.badge}>🚀 Stage 4 complete — auto-deployed via CI/CD · v3</p>
       {user ? (
         <>
           <p>
