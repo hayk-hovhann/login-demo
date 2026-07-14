@@ -21,7 +21,7 @@ jobs:
   # PR — before anyone runs `cloudformation deploy`. This also means infra-only
   # PRs now trigger a workflow (no more "orphan" PRs that match no path filter
   # and deadlock on a required check that never reports).
-  build:                                   # named 'build' to match the required check
+  infra-validate:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

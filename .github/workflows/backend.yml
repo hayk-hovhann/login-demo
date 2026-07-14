@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   # ---------- CI: runs on PRs and on main ----------
-  build:
+  backend-build:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -59,7 +59,7 @@ jobs:
 
   # ---------- CD: build + push image to ECR, ONLY on main ----------
   push:
-    needs: build                              # only runs if build passed
+    needs: backend-build                      # only runs if build passed
     if: github.ref == 'refs/heads/main'       # only on main (not PRs)
     runs-on: ubuntu-latest
     permissions:
