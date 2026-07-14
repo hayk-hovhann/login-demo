@@ -1,26 +1,11 @@
-name: infra CI
+name: infra CI (reusable)
 
+# Reusable CI for infrastructure. Not self-triggering — called by ci.yml via
+# `uses:`. Validates the CloudFormation templates with cfn-lint.
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - 'infra/**'
-      - '.github/workflows/infra.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'infra/**'
-      - '.github/workflows/infra.yml'
-
-concurrency:
-  group: infra-${{ github.ref }}
-  cancel-in-progress: true
+  workflow_call:
 
 jobs:
-  # Validate the CloudFormation templates so infra mistakes are caught in the
-  # PR — before anyone runs `cloudformation deploy`. This also means infra-only
-  # PRs now trigger a workflow (no more "orphan" PRs that match no path filter
-  # and deadlock on a required check that never reports).
   infra-validate:
     runs-on: ubuntu-latest
     steps:

@@ -1,0 +1,47 @@
+name: frontend CI (reusable)
+
+# Reusable CI for the frontend. Not self-triggering — called by ci.yml via
+# `uses:`. Contains ONLY validation; the CD half (ECR push + ECS deploy) lives
+# in cd.yml.
+on:
+  workflow_call:
+
+jobs:
+  frontend-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Docker build
+        run: docker build -t login-demo-frontend:ci .
+
+      - name: Docker Scout (CVE quickview)
+        continue-on-error: true
+        uses: docker/scout-action@v1
+        with:
+          command: quickview,cves
+          image: login-demo-frontend:ci
+          only-severities: critical,high
