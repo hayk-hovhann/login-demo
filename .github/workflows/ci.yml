@@ -1,0 +1,99 @@
+name: CI
+
+# THE orchestrator. This is the single workflow whose gate job is the ONE
+# required status check for merging into main.
+#
+# How it avoids the path-filter/required-check deadlock WITHOUT polling:
+#   - It has NO path filter, so it always runs on every PR → its gate always
+#     reports (no "waiting forever").
+#   - A `changes` job detects which areas changed.
+#   - Each area's reusable CI workflow is called ONLY if that area changed
+#     (conditional `uses:` via `if:`), preserving path-aware efficiency.
+#   - The `gate` job `needs:` all three area jobs and uses `if: always()` to
+#     evaluate their results — a SKIPPED area (didn't change) is fine; a FAILED
+#     area fails the gate. Native cross-job waiting — no API polling.
+#
+# Branch ruleset requires ONLY:  CI / gate
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  # No `paths:` filter on purpose — must run on every PR (and on main so the
+  # `gate` check is registered as selectable in the ruleset).
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # 1) Detect which top-level areas changed.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      infra: ${{ steps.filter.outputs.infra }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect changed paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+            frontend:
+              - 'frontend/**'
+            infra:
+              - 'infra/**'
+
+  # 2) Call each area's reusable CI — only if that area changed.
+  backend:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    uses: ./.github/workflows/backend-ci.yml
+
+  frontend:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    uses: ./.github/workflows/frontend-ci.yml
+
+  infra:
+    needs: changes
+    if: needs.changes.outputs.infra == 'true'
+    uses: ./.github/workflows/infra-ci.yml
+
+  # 3) The gate: the single required check.
+  #    `needs` all three; `if: always()` so it runs even when some are skipped.
+  #    Fails only if a job that actually ran ended in failure/cancelled.
+  gate:
+    needs: [backend, frontend, infra]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate area results
+        env:
+          BACKEND: ${{ needs.backend.result }}
+          FRONTEND: ${{ needs.frontend.result }}
+          INFRA: ${{ needs.infra.result }}
+        run: |
+          set -euo pipefail
+          echo "backend=$BACKEND  frontend=$FRONTEND  infra=$INFRA"
+          # A result is one of: success | failure | cancelled | skipped
+          # 'skipped' = that area didn't change → acceptable.
+          # Anything other than success or skipped = fail the gate.
+          fail=0
+          for r in "$BACKEND" "$FRONTEND" "$INFRA"; do
+            if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
+              fail=1
+            fi
+          done
+          if [ "$fail" -eq 1 ]; then
+            echo "::error::One or more required area checks did not pass."
+            exit 1
+          fi
+          echo "All triggered area checks passed (skipped areas are OK)."

@@ -1,66 +1,84 @@
-name: frontend CI
+name: CD
+
+# Continuous Delivery/Deployment. Runs ONLY on push to main (post-merge).
+# Separate from CI: CI validates PRs; CD ships merged code.
+#
+# Structure:
+#   - `changes` detects which areas changed in the merge.
+#   - backend/frontend: build + push image to ECR (only if that area changed).
+#   - frontend also deploys to ECS (locate running service, register a new
+#     SHA-pinned task def, roll the service). Skips gracefully if the ephemeral
+#     app stack is torn down.
+#   - infra has no CD (cfn templates are deployed manually via `cloudformation deploy`).
+#
+# Asymmetry is intentional: backend = push only; frontend = push + deploy.
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - 'frontend/**'
-      - '.github/workflows/frontend.yml'
   push:
     branches: [main]
-    paths:
-      - 'frontend/**'
-      - '.github/workflows/frontend.yml'
 
 concurrency:
-  group: frontend-${{ github.ref }}
-  cancel-in-progress: true
+  group: cd-${{ github.ref }}
+  cancel-in-progress: false   # don't cancel an in-flight deploy
 
 jobs:
-  # ---------- CI: runs on PRs and on main ----------
-  frontend-build:
+  # 1) Which areas changed in this push?
+  changes:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - name: Detect changed paths
+        id: filter
+        uses: dorny/paths-filter@v3
         with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          filters: |
+            backend:
+              - 'backend/**'
+            frontend:
+              - 'frontend/**'
 
-      - name: Install deps
-        run: npm ci
+  # 2) Backend: build + push image to ECR (only if backend changed).
+  backend-push:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write            # OIDC: mint the token
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Lint
-        run: npm run lint
-
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Build
-        run: npm run build
-
-      - name: Docker build
-        run: docker build -t login-demo-frontend:ci .
-
-      - name: Docker Scout (CVE quickview)
-        continue-on-error: true
-        uses: docker/scout-action@v1
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          command: quickview,cves
-          image: login-demo-frontend:ci
-          only-severities: critical,high
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
 
-  # ---------- CD: build + push image to ECR, ONLY on main ----------
-  push:
-    needs: frontend-build
-    if: github.ref == 'refs/heads/main'
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          REPO: login-demo-backend
+          SHA: ${{ github.sha }}
+        run: |
+          docker build -t "$REGISTRY/$REPO:$SHA" -t "$REGISTRY/$REPO:latest" ./backend
+          docker push "$REGISTRY/$REPO:$SHA"
+          docker push "$REGISTRY/$REPO:latest"
+          echo "Pushed $REGISTRY/$REPO:$SHA and :latest"
+
+  # 3) Frontend: build + push image to ECR (only if frontend changed).
+  frontend-push:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -90,16 +108,14 @@ jobs:
           docker push "$REGISTRY/$REPO:latest"
           echo "Pushed $REGISTRY/$REPO:$SHA and :latest"
 
-  # ---------- CD: deploy the new image to ECS (SHA-pinned), ONLY on main ----------
-  deploy:
-    needs: push                               # only after the image is in ECR
-    if: github.ref == 'refs/heads/main'
+  # 4) Frontend: deploy the new image to ECS (SHA-pinned). Runs after the push.
+  frontend-deploy:
+    needs: frontend-push
     runs-on: ubuntu-latest
     permissions:
-      id-token: write                         # OIDC
+      id-token: write            # OIDC
       contents: read
     env:
-      CLUSTER: login-demo-app-Cluster          # NOTE: cluster name changes per stack recreate; see comment below
       SERVICE_PREFIX: login-demo-app-FrontendService
       CONTAINER: frontend
       REPO: login-demo-frontend
