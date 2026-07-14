@@ -5,7 +5,7 @@ import { AppModule } from './app.module';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  // All routes are served under /api  (so the ALB / nginx can route /api/* here)
+  // All routes are served under /api (so the ALB / nginx can route /api/* here)
   app.setGlobalPrefix('api');
 
   // Session middleware. Default store is in-memory (fine for now, see README caveats).
