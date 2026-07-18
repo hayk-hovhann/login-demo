@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'login-demo Stage 4 — ECS/Fargate two services (frontend + backend) behind an ALB with path routing. EPHEMERAL: delete-stack when done.'
+Description: 'login-demo Stage 4 — ECS/Fargate two services (frontend + backend) behind an ALB with path routing, plus CloudWatch observability (dashboard + alarms -> SNS). EPHEMERAL: delete-stack when done.'
 
 Parameters:
   BackendImageTag:
@@ -10,6 +10,15 @@ Parameters:
     Type: String
     Default: 'latest'
     Description: 'Image tag for the FRONTEND service (e.g. latest or the frontend git SHA). Each service has its OWN tag — a frontend commit SHA is not a valid backend tag.'
+  NotificationEmail:
+    Type: String
+    Default: ''
+    Description: 'Email address for CloudWatch alarm notifications. Leave BLANK to create the SNS topic with no subscription (alarms still fire, just nowhere to deliver). If set, AWS emails a confirmation link you must click before alerts arrive.'
+
+Conditions:
+  # Only create the email subscription when an address was actually provided.
+  # The topic and alarms exist either way; this just controls delivery.
+  HasEmail: !Not [!Equals [!Ref NotificationEmail, '']]
 
 Resources:
 
@@ -175,7 +184,12 @@ Resources:
   # ===================== ECS cluster + shared execution role =====================
   Cluster:
     Type: 'AWS::ECS::Cluster'
-    Properties: {}
+    Properties:
+      # Pinned name so the CloudWatch dashboard's ClusterName dimension is a known
+      # literal (not a random suffix we'd have to GetAtt). NOTE: the CD pipeline's
+      # locate step greps service/cluster ARNs for the substring 'login-demo-app-Cluster',
+      # so this name MUST keep that exact casing/substring or deploys silently skip.
+      ClusterName: !Sub '${AWS::StackName}-Cluster'
 
   # Execution role = what Fargate needs to START a task (pull image, ship logs).
   # The AWS-managed policy grants exactly ECR pull + CloudWatch logs.
@@ -235,6 +249,8 @@ Resources:
     DependsOn: ApiListenerRule
     Type: 'AWS::ECS::Service'
     Properties:
+      # Pinned name -> deterministic ServiceName dimension for the dashboard.
+      ServiceName: !Sub '${AWS::StackName}-BackendService'
       Cluster: !Ref Cluster
       DesiredCount: 1                    # memory-only sessions can't span replicas
       LaunchType: FARGATE
@@ -286,6 +302,9 @@ Resources:
     DependsOn: HttpListener
     Type: 'AWS::ECS::Service'
     Properties:
+      # Pinned name -> deterministic ServiceName dimension AND keeps the CD locate
+      # substring 'login-demo-app-FrontendService' intact.
+      ServiceName: !Sub '${AWS::StackName}-FrontendService'
       Cluster: !Ref Cluster
       DesiredCount: 1
       LaunchType: FARGATE
@@ -309,7 +328,146 @@ Resources:
             - !Ref ServiceSecurityGroup
           Subnets: [!Ref SubnetA, !Ref SubnetB]
 
+  # ===================== Observability: SNS topic + email =====================
+  # The topic is the fan-out point: alarms publish here, subscribers receive.
+  # One topic, both alarms wired to it. Email is the only subscriber for now.
+  AlarmTopic:
+    Type: 'AWS::SNS::Topic'
+    Properties:
+      TopicName: !Sub '${AWS::StackName}-alarms'
+
+  AlarmEmailSubscription:
+    Condition: HasEmail
+    Type: 'AWS::SNS::Subscription'
+    Properties:
+      TopicArn: !Ref AlarmTopic
+      Protocol: email
+      Endpoint: !Ref NotificationEmail
+
+  # ===================== Observability: alarms =====================
+  # Alarm #1 — backend is UP but ERRORING. Fires when the backend returns more
+  # than 5 HTTP 5xx responses in a single minute. Target 5xx = the app itself
+  # threw 500s (a real bug), distinct from ALB 5xx (backend unreachable).
+  # Metric is sparse (only emitted when 5xx happen) -> missing data = healthy.
+  Backend5xxAlarm:
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-backend-5xx'
+      AlarmDescription: 'Backend returned more than 5 HTTP 5xx responses in a minute.'
+      Namespace: 'AWS/ApplicationELB'
+      MetricName: 'HTTPCode_Target_5XX_Count'
+      Dimensions:
+        - Name: TargetGroup
+          Value: !GetAtt BackendTargetGroup.TargetGroupFullName
+        - Name: LoadBalancer
+          Value: !GetAtt LoadBalancer.LoadBalancerFullName
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopic]
+      OKActions: [!Ref AlarmTopic]        # also notify on recovery (all-clear email)
+
+  # Alarm #2 — backend is DOWN / unhealthy. Fires when the backend target group
+  # has zero healthy tasks for 3 straight minutes. This is the one that would
+  # have caught your Stage 4 crash-loop and the health-check-path failures.
+  BackendUnhealthyHostAlarm:
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-backend-unhealthy'
+      AlarmDescription: 'Backend target group had no healthy tasks for 3 minutes.'
+      Namespace: 'AWS/ApplicationELB'
+      MetricName: 'HealthyHostCount'
+      Dimensions:
+        - Name: TargetGroup
+          Value: !GetAtt BackendTargetGroup.TargetGroupFullName
+        - Name: LoadBalancer
+          Value: !GetAtt LoadBalancer.LoadBalancerFullName
+      Statistic: Minimum
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopic]
+      OKActions: [!Ref AlarmTopic]
+
+  # ===================== Observability: dashboard =====================
+  # A saved view of metrics that already exist (ECS + ALB emit these for free).
+  # Session-scoped: created and destroyed with this ephemeral stack, so it shows
+  # "is this session healthy right now", not long-term trends.
+  Dashboard:
+    Type: 'AWS::CloudWatch::Dashboard'
+    Properties:
+      DashboardName: !Sub '${AWS::StackName}-dashboard'
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric", "x": 0, "y": 0, "width": 12, "height": 6,
+              "properties": {
+                "title": "Backend errors (5xx)",
+                "view": "timeSeries", "stacked": false,
+                "region": "${AWS::Region}", "period": 60,
+                "metrics": [
+                  [ "AWS/ApplicationELB", "HTTPCode_Target_5XX_Count", "TargetGroup", "${BackendTargetGroup.TargetGroupFullName}", "LoadBalancer", "${LoadBalancer.LoadBalancerFullName}", { "stat": "Sum", "label": "backend target 5xx" } ],
+                  [ "AWS/ApplicationELB", "HTTPCode_ELB_5XX_Count", "LoadBalancer", "${LoadBalancer.LoadBalancerFullName}", { "stat": "Sum", "label": "ALB 5xx (502/503/504)" } ]
+                ]
+              }
+            },
+            {
+              "type": "metric", "x": 12, "y": 0, "width": 12, "height": 6,
+              "properties": {
+                "title": "Backend latency (TargetResponseTime, s)",
+                "view": "timeSeries", "stacked": false,
+                "region": "${AWS::Region}", "period": 60,
+                "metrics": [
+                  [ "AWS/ApplicationELB", "TargetResponseTime", "TargetGroup", "${BackendTargetGroup.TargetGroupFullName}", "LoadBalancer", "${LoadBalancer.LoadBalancerFullName}", { "stat": "Average", "label": "avg" } ],
+                  [ "AWS/ApplicationELB", "TargetResponseTime", "TargetGroup", "${BackendTargetGroup.TargetGroupFullName}", "LoadBalancer", "${LoadBalancer.LoadBalancerFullName}", { "stat": "p90", "label": "p90" } ],
+                  [ "AWS/ApplicationELB", "TargetResponseTime", "TargetGroup", "${BackendTargetGroup.TargetGroupFullName}", "LoadBalancer", "${LoadBalancer.LoadBalancerFullName}", { "stat": "p99", "label": "p99" } ]
+                ]
+              }
+            },
+            {
+              "type": "metric", "x": 0, "y": 6, "width": 12, "height": 6,
+              "properties": {
+                "title": "Healthy hosts per service",
+                "view": "timeSeries", "stacked": false,
+                "region": "${AWS::Region}", "period": 60,
+                "yAxis": { "left": { "min": 0 } },
+                "metrics": [
+                  [ "AWS/ApplicationELB", "HealthyHostCount", "TargetGroup", "${BackendTargetGroup.TargetGroupFullName}", "LoadBalancer", "${LoadBalancer.LoadBalancerFullName}", { "stat": "Minimum", "label": "backend healthy" } ],
+                  [ "AWS/ApplicationELB", "HealthyHostCount", "TargetGroup", "${FrontendTargetGroup.TargetGroupFullName}", "LoadBalancer", "${LoadBalancer.LoadBalancerFullName}", { "stat": "Minimum", "label": "frontend healthy" } ]
+                ]
+              }
+            },
+            {
+              "type": "metric", "x": 12, "y": 6, "width": 12, "height": 6,
+              "properties": {
+                "title": "ECS CPU / Memory (%)",
+                "view": "timeSeries", "stacked": false,
+                "region": "${AWS::Region}", "period": 60,
+                "yAxis": { "left": { "min": 0, "max": 100 } },
+                "metrics": [
+                  [ "AWS/ECS", "CPUUtilization", "ClusterName", "${AWS::StackName}-Cluster", "ServiceName", "${AWS::StackName}-BackendService", { "stat": "Average", "label": "backend CPU%" } ],
+                  [ "AWS/ECS", "MemoryUtilization", "ClusterName", "${AWS::StackName}-Cluster", "ServiceName", "${AWS::StackName}-BackendService", { "stat": "Average", "label": "backend Mem%" } ],
+                  [ "AWS/ECS", "CPUUtilization", "ClusterName", "${AWS::StackName}-Cluster", "ServiceName", "${AWS::StackName}-FrontendService", { "stat": "Average", "label": "frontend CPU%" } ],
+                  [ "AWS/ECS", "MemoryUtilization", "ClusterName", "${AWS::StackName}-Cluster", "ServiceName", "${AWS::StackName}-FrontendService", { "stat": "Average", "label": "frontend Mem%" } ]
+                ]
+              }
+            }
+          ]
+        }
+
 Outputs:
   URL:
     Description: 'App URL (frontend at /, backend at /api/*)'
     Value: !Sub 'http://${LoadBalancer.DNSName}'
+  DashboardURL:
+    Description: 'CloudWatch dashboard for this session'
+    Value: !Sub 'https://console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${AWS::StackName}-dashboard'
+  AlarmTopicArn:
+    Description: 'SNS topic that both alarms publish to'
+    Value: !Ref AlarmTopic
