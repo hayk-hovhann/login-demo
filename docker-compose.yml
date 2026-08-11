@@ -1,19 +1,31 @@
-# Local one-origin dev: nginx (frontend) serves the UI and proxies /api -> backend.
 # Browse http://localhost:8080  — the browser only ever sees ONE origin, so the
 # session cookie works with no CORS setup.
 services:
+  redis:
+    image: redis:7-alpine
+    expose:
+      - "6379"
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      retries: 5
+
   backend:
     build: ./backend
     environment:
       - PORT=3000
       - SESSION_SECRET=dev-secret-change-me
-      - COOKIE_SECURE=false          # true only when served over HTTPS
+      - COOKIE_SECURE=false            # true only when served over HTTPS
+      - REDIS_URL=redis://redis:6379   # compose DNS resolves the service name
     expose:
-      - "3000"                       # visible to other compose services, not the host
+      - "3000"                         # visible to other compose services, not the host
+    depends_on:
+      redis:
+        condition: service_healthy
 
   frontend:
     build: ./frontend
     ports:
-      - "8080:80"                    # http://localhost:8080
+      - "8080:80"                      # http://localhost:8080
     depends_on:
       - backend
