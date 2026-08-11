@@ -6,6 +6,7 @@
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
+    "lock": "docker run --rm -v \"$PWD\":/app -w /app node:24-alpine sh -c 'npm install --package-lock-only && chown $(id -u):$(id -g) package-lock.json'",
     "build": "nest build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
