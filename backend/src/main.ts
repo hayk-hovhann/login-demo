@@ -12,13 +12,28 @@ async function bootstrap() {
   // All routes are served under /api (so the ALB / nginx can route /api/* here)
   app.setGlobalPrefix('api');
 
-  const redisClient = createClient({ url: config.getOrThrow<string>('REDIS_URL') });
+  const redisClient = createClient({
+    url: config.getOrThrow<string>('REDIS_URL'),
+    socket: {
+      connectTimeout: 5000,
+      // Return an Error to STOP reconnecting -> connect() rejects instead of
+      // hanging. Without this, the default strategy retries forever and the
+      // await never settles.
+      reconnectStrategy: (retries) =>
+        retries > 5
+          ? new Error('Redis unreachable')
+          : Math.min(retries * 200, 2000),
+    },
+  });
   redisClient.on('error', (err) => console.error('Redis error:', err));
   await redisClient.connect();
 
   app.use(
     session({
-      store: new RedisStore({ client: redisClient, prefix: 'login-demo:sess:' }),
+      store: new RedisStore({
+        client: redisClient,
+        prefix: 'login-demo:sess:',
+      }),
       secret: config.getOrThrow<string>('SESSION_SECRET'),
       resave: false,
       saveUninitialized: false,
@@ -35,4 +50,7 @@ async function bootstrap() {
   await app.listen(config.get<number>('PORT')!, '0.0.0.0');
   console.log(`Backend listening on :${port}`);
 }
-void bootstrap();
+void bootstrap().catch((err) => {
+  console.error('Fatal: failed to start —', err);
+  process.exit(1);
+});
