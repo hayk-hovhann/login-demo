@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'login-demo Stage 4 — ECS/Fargate two services (frontend + backend) behind an ALB with path routing, plus CloudWatch observability (dashboard + alarms -> SNS). EPHEMERAL: delete-stack when done.'
+Description: 'login-demo Stage 4 — ECS/Fargate two services (frontend + backend) behind an ALB with path routing, Redis session store, plus CloudWatch observability (dashboard + alarms -> SNS). EPHEMERAL: delete-stack when done.'
 
 Parameters:
   BackendImageTag:
@@ -92,6 +92,9 @@ Resources:
 
   # One SG for both services. Allows the ALB to reach frontend:80 and backend:3000.
   # A task only listens on its own port, so sharing the SG is fine.
+  # NOTE: because it's shared, the RedisSecurityGroup rule below also admits the
+  # frontend task to 6379. Harmless (nginx has no Redis client) but broader than
+  # least-privilege — splitting into per-service SGs is a separate cleanup.
   ServiceSecurityGroup:
     Type: 'AWS::EC2::SecurityGroup'
     Properties:
@@ -181,6 +184,71 @@ Resources:
         - Key: deregistration_delay.timeout_seconds
           Value: 30
 
+  # ===================== Redis (session store) =====================
+  # Externalizes session state so the backend becomes stateless.
+  # EPHEMERAL like everything else here: ~$0.016/hr for t4g.micro, so a
+  # session costs pennies. Sessions are throwaway — losing the cache on
+  # teardown is the intended behaviour, not a loss.
+
+  # Which subnets ElastiCache may place the node in. Reuses the existing
+  # two — Redis needs no internet access, and in-VPC routing is automatic
+  # via the VPC's implicit local route, so no NAT and no new subnets.
+  RedisSubnetGroup:
+    Type: 'AWS::ElastiCache::SubnetGroup'
+    Properties:
+      CacheSubnetGroupName: !Sub '${AWS::StackName}-redis'
+      Description: 'Subnets ElastiCache may place the Redis node in.'
+      SubnetIds:
+        - !Ref SubnetA
+        - !Ref SubnetB
+
+  # SG chaining: only things in ServiceSecurityGroup may reach 6379.
+  # No password — in-VPC access control IS the security boundary here.
+  # Nothing outside the VPC can route to it at all.
+  RedisSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: !Sub '${AWS::StackName}-redis'
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - SourceSecurityGroupId: !Ref ServiceSecurityGroup
+          FromPort: 6379
+          ToPort: 6379
+          IpProtocol: tcp
+
+  # Single node, no replication. Takes ~5-10 min to create — the slowest
+  # resource in this stack by far.
+  RedisCluster:
+    Type: 'AWS::ElastiCache::CacheCluster'
+    Properties:
+      Engine: redis
+      EngineVersion: '7.1'
+      CacheNodeType: cache.t4g.micro
+      NumCacheNodes: 1
+      CacheSubnetGroupName: !Ref RedisSubnetGroup
+      VpcSecurityGroupIds:
+        - !GetAtt RedisSecurityGroup.GroupId
+
+  # ===================== Session signing secret =====================
+  # The HMAC key express-session uses to sign the session cookie. It does NOT
+  # hold session data (that's Redis) — it makes session IDs unforgeable.
+  #
+  # Every backend task MUST see the SAME value: a cookie signed by task A has to
+  # verify on task B, or users appear randomly logged out as the ALB bounces
+  # them. That's why this is a scaling prerequisite, not a nice-to-have.
+  #
+  # NOTE — deliberately NOT pinning `Name`. Secrets Manager keeps a deleted
+  # secret for a 7-day recovery window, so a pinned name would collide on the
+  # next create-stack after teardown ("scheduled for deletion"). A generated
+  # name sidesteps that entirely, and nothing greps for this one.
+  SessionSecret:
+    Type: 'AWS::SecretsManager::Secret'
+    Properties:
+      Description: !Sub 'express-session signing key for ${AWS::StackName}'
+      GenerateSecretString:
+        PasswordLength: 64
+        ExcludePunctuation: true          # keeps it shell/env-var safe
+
   # ===================== ECS cluster + shared execution role =====================
   Cluster:
     Type: 'AWS::ECS::Cluster'
@@ -191,8 +259,10 @@ Resources:
       # so this name MUST keep that exact casing/substring or deploys silently skip.
       ClusterName: !Sub '${AWS::StackName}-Cluster'
 
-  # Execution role = what Fargate needs to START a task (pull image, ship logs).
-  # The AWS-managed policy grants exactly ECR pull + CloudWatch logs.
+  # Execution role = what Fargate needs to START a task (pull image, ship logs,
+  # and now resolve secrets). The AWS-managed policy grants exactly ECR pull +
+  # CloudWatch logs — it does NOT cover Secrets Manager, hence the inline policy.
+  # Without it a task fails to start with ResourceInitializationError.
   TaskExecutionRole:
     Type: 'AWS::IAM::Role'
     Properties:
@@ -204,6 +274,15 @@ Resources:
             Action: 'sts:AssumeRole'
       ManagedPolicyArns:
         - 'arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
+      Policies:
+        - PolicyName: 'read-session-secret'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Scoped to this one secret — not secretsmanager:* on '*'.
+              - Effect: Allow
+                Action: 'secretsmanager:GetSecretValue'
+                Resource: !Ref SessionSecret
 
   # ===================== Logs =====================
   BackendLogGroup:
@@ -233,11 +312,20 @@ Resources:
           PortMappings:
             - ContainerPort: 3000
               Protocol: tcp
+          # Environment = plaintext, visible in the console and in describe-task-definition.
           Environment:
             - Name: PORT
               Value: '3000'
             - Name: COOKIE_SECURE
               Value: 'false'           # ALB is plain HTTP :80 (no TLS) for this demo
+            - Name: REDIS_URL
+              Value: !Sub 'redis://${RedisCluster.RedisEndpoint.Address}:${RedisCluster.RedisEndpoint.Port}'
+          # Secrets = resolved at task start by the EXECUTION role and injected as
+          # env vars. The value never appears in the template, the console, or git.
+          # The app reads it exactly like any other process.env value.
+          Secrets:
+            - Name: SESSION_SECRET
+              ValueFrom: !Ref SessionSecret
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -252,7 +340,10 @@ Resources:
       # Pinned name -> deterministic ServiceName dimension for the dashboard.
       ServiceName: !Sub '${AWS::StackName}-BackendService'
       Cluster: !Ref Cluster
-      DesiredCount: 1                    # memory-only sessions can't span replicas
+      # Sessions now live in Redis and all tasks share one signing secret, so
+      # this is no longer forced to 1 — raise it once the single-task path is
+      # verified, then prove sessions survive a bounce between tasks.
+      DesiredCount: 1
       LaunchType: FARGATE
       PlatformVersion: '1.4.0'
       TaskDefinition: !Ref BackendTaskDefinition
@@ -465,6 +556,12 @@ Outputs:
   URL:
     Description: 'App URL (frontend at /, backend at /api/*)'
     Value: !Sub 'http://${LoadBalancer.DNSName}'
+  RedisEndpoint:
+    Description: 'Redis endpoint the backend connects to'
+    Value: !Sub '${RedisCluster.RedisEndpoint.Address}:${RedisCluster.RedisEndpoint.Port}'
+  SessionSecretArn:
+    Description: 'Secrets Manager ARN holding the express-session signing key'
+    Value: !Ref SessionSecret
   DashboardURL:
     Description: 'CloudWatch dashboard for this session'
     Value: !Sub 'https://console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${AWS::StackName}-dashboard'
