@@ -14,6 +14,11 @@ Parameters:
     Type: String
     Default: ''
     Description: 'Email address for CloudWatch alarm notifications. Leave BLANK to create the SNS topic with no subscription (alarms still fire, just nowhere to deliver). If set, AWS emails a confirmation link you must click before alerts arrive.'
+  EnableExec:
+    Type: String
+    Default: 'false'
+    AllowedValues: [ 'true', 'false' ]
+    Description: 'Enable ECS Exec (shell into a running backend task). Break-glass — leave false unless actively debugging.'
 
 Conditions:
   # Only create the email subscription when an address was actually provided.
@@ -216,18 +221,25 @@ Resources:
           ToPort: 6379
           IpProtocol: tcp
 
-  # Single node, no replication. Takes ~5-10 min to create — the slowest
-  # resource in this stack by far.
-  RedisCluster:
-    Type: 'AWS::ElastiCache::CacheCluster'
+  # Single-node Redis, cluster mode disabled. ReplicationGroup (not CacheCluster)
+  # because CacheCluster's RedisEndpoint GetAtt rendered EMPTY on engine 7.1 —
+  # collapsed REDIS_URL to "redis://:". ReplicationGroup's PrimaryEndPoint is
+  # reliably populated and is AWS's current recommended path for Redis.
+  # NumCacheClusters 1 = one primary, zero replicas. Still ~$0.016/hr, still
+  # the slowest resource in the stack (~10-15 min to create).
+  RedisReplicationGroup:
+    Type: 'AWS::ElastiCache::ReplicationGroup'
     Properties:
+      ReplicationGroupDescription: !Sub '${AWS::StackName} session store'
       Engine: redis
       EngineVersion: '7.1'
       CacheNodeType: cache.t4g.micro
-      NumCacheNodes: 1
+      NumCacheClusters: 1
+      AutomaticFailoverEnabled: false      # can't enable with a single node
       CacheSubnetGroupName: !Ref RedisSubnetGroup
-      VpcSecurityGroupIds:
+      SecurityGroupIds:                    # NOTE: not VpcSecurityGroupIds
         - !GetAtt RedisSecurityGroup.GroupId
+      Port: 6379
 
   # ===================== Session signing secret =====================
   # The HMAC key express-session uses to sign the session cookie. It does NOT
@@ -284,6 +296,32 @@ Resources:
                 Action: 'secretsmanager:GetSecretValue'
                 Resource: !Ref SessionSecret
 
+  # Task role = what the RUNNING container assumes for its own AWS calls
+  # (distinct from the execution role, which Fargate uses to START the task).
+  # The app itself needs no AWS access; this exists solely so ECS Exec can
+  # open its SSM messaging channel into the container.
+  TaskRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: 'ecs-tasks.amazonaws.com'
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: 'ecs-exec-ssm'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ssmmessages:CreateControlChannel'
+                  - 'ssmmessages:CreateDataChannel'
+                  - 'ssmmessages:OpenControlChannel'
+                  - 'ssmmessages:OpenDataChannel'
+                Resource: '*'
+
   # ===================== Logs =====================
   BackendLogGroup:
     Type: 'AWS::Logs::LogGroup'
@@ -305,6 +343,7 @@ Resources:
       NetworkMode: awsvpc
       RequiresCompatibilities: [FARGATE]
       ExecutionRoleArn: !GetAtt 'TaskExecutionRole.Arn'
+      TaskRoleArn: !GetAtt 'TaskRole.Arn'
       ContainerDefinitions:
         - Name: backend
           Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/login-demo-backend:${BackendImageTag}'
@@ -319,7 +358,7 @@ Resources:
             - Name: COOKIE_SECURE
               Value: 'false'           # ALB is plain HTTP :80 (no TLS) for this demo
             - Name: REDIS_URL
-              Value: !Sub 'redis://${RedisCluster.RedisEndpoint.Address}:${RedisCluster.RedisEndpoint.Port}'
+              Value: !Sub 'redis://${RedisReplicationGroup.PrimaryEndPoint.Address}:${RedisReplicationGroup.PrimaryEndPoint.Port}'
           # Secrets = resolved at task start by the EXECUTION role and injected as
           # env vars. The value never appears in the template, the console, or git.
           # The app reads it exactly like any other process.env value.
@@ -345,6 +384,7 @@ Resources:
       # verified, then prove sessions survive a bounce between tasks.
       DesiredCount: 1
       LaunchType: FARGATE
+      EnableExecuteCommand: !Ref EnableExec
       PlatformVersion: '1.4.0'
       TaskDefinition: !Ref BackendTaskDefinition
       HealthCheckGracePeriodSeconds: 60
@@ -558,7 +598,7 @@ Outputs:
     Value: !Sub 'http://${LoadBalancer.DNSName}'
   RedisEndpoint:
     Description: 'Redis endpoint the backend connects to'
-    Value: !Sub '${RedisCluster.RedisEndpoint.Address}:${RedisCluster.RedisEndpoint.Port}'
+    Value: !Sub '${RedisReplicationGroup.PrimaryEndPoint.Address}:${RedisReplicationGroup.PrimaryEndPoint.Port}'
   SessionSecretArn:
     Description: 'Secrets Manager ARN holding the express-session signing key'
     Value: !Ref SessionSecret
