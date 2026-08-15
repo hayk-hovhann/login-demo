@@ -1,0 +1,125 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'login-demo network foundation — VPC + two public subnets + IGW + routing. DURABLE + ZERO idle cost (no NAT). Both the data stack and the app stack import these. Deploy once; do not tear down per session.'
+
+# ============================================================================
+# WHY THIS STACK EXISTS
+# ----------------------------------------------------------------------------
+# The network has its OWN lifecycle — it changes rarely and everything else
+# sits on top of it. Making the app stack (ephemeral) or the data stack (durable
+# but session-scoped here) own the VPC forces the wrong dependency. So the VPC
+# becomes a third foundation, alongside login-demo-ci-ecr, that both consumers
+# import via ImportValue.
+#
+# COST: $0 at rest. VPC / subnets / route tables / IGW / SGs are all free.
+# There is deliberately NO NAT Gateway (that would be ~$32/mo). Tasks run in
+# PUBLIC subnets with public IPs for outbound, exactly as the app stack already
+# does — so nothing here bills. Keep it public-subnet-only to keep it free.
+# ============================================================================
+
+Resources:
+
+  VPC:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      CidrBlock: '172.31.0.0/16'
+      EnableDnsHostnames: true            # RDS + service DNS names need this
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-vpc'
+
+  InternetGateway:
+    Type: 'AWS::EC2::InternetGateway'
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-igw'
+
+  VPCGatewayAttachment:
+    Type: 'AWS::EC2::VPCGatewayAttachment'
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # Two subnets in two AZs — required both for the ALB (needs >=2 AZs) and for
+  # the RDS DB subnet group (also needs >=2 AZs, even for a single-AZ instance).
+  SubnetA:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: '172.31.38.0/24'
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-subnet-a'
+
+  SubnetB:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: '172.31.37.0/24'
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-subnet-b'
+
+  RouteTable:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-rt'
+
+  RouteTableAssociationA:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref SubnetA
+      RouteTableId: !Ref RouteTable
+
+  RouteTableAssociationB:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref SubnetB
+      RouteTableId: !Ref RouteTable
+
+  RoutePublicToInternet:
+    DependsOn: VPCGatewayAttachment
+    Type: 'AWS::EC2::Route'
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId: !Ref InternetGateway
+
+# ============================================================================
+# EXPORTS — other stacks consume these with Fn::ImportValue.
+# Export names are namespaced by stack name so they're stable and collision-free.
+# NOTE: once another stack imports an export, CloudFormation LOCKS it — you can't
+# modify or delete the exporting resource until every importer stops using it.
+# That's the intended safety rail for a shared foundation.
+# ============================================================================
+Outputs:
+
+  VpcId:
+    Description: 'VPC id'
+    Value: !Ref VPC
+    Export:
+      Name: !Sub '${AWS::StackName}-VpcId'
+
+  SubnetAId:
+    Description: 'Public subnet A id'
+    Value: !Ref SubnetA
+    Export:
+      Name: !Sub '${AWS::StackName}-SubnetAId'
+
+  SubnetBId:
+    Description: 'Public subnet B id'
+    Value: !Ref SubnetB
+    Export:
+      Name: !Sub '${AWS::StackName}-SubnetBId'
+
+  VpcCidr:
+    Description: 'VPC CIDR block (handy for SG rules that need a CIDR)'
+    Value: '172.31.0.0/16'
+    Export:
+      Name: !Sub '${AWS::StackName}-VpcCidr'

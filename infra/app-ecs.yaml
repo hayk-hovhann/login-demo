@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'login-demo Stage 4 — ECS/Fargate two services (frontend + backend) behind an ALB with path routing, Redis session store, plus CloudWatch observability (dashboard + alarms -> SNS). EPHEMERAL: delete-stack when done.'
+Description: 'login-demo Stage 4 — ECS/Fargate two services (frontend + backend) behind an ALB with path routing, Redis session store, plus CloudWatch observability (dashboard + alarms -> SNS). EPHEMERAL: delete-stack when done. Imports its VPC/subnets from the durable login-demo-network stack.'
 
 Parameters:
   BackendImageTag:
@@ -19,6 +19,15 @@ Parameters:
     Default: 'false'
     AllowedValues: [ 'true', 'false' ]
     Description: 'Enable ECS Exec (shell into a running backend task). Break-glass — leave false unless actively debugging.'
+  NetworkStackName:
+    Type: String
+    Default: 'login-demo-network'
+    Description: 'Name of the durable network foundation stack to import the VPC/subnets from. Templates should not assume sibling stack names — this parameterizes the cross-stack reference.'
+
+  DataStackName:
+    Type: String
+    Default: 'login-demo-data'
+    Description: 'Name of the data stack to import the DB endpoint, secret, and client SG from.'
 
 Conditions:
   # Only create the email subscription when an address was actually provided.
@@ -27,68 +36,20 @@ Conditions:
 
 Resources:
 
-  # ===================== Network foundation =====================
-  VPC:
-    Type: 'AWS::EC2::VPC'
-    Properties:
-      CidrBlock: '172.31.0.0/16'
-      EnableDnsHostnames: true
-
-  InternetGateway:
-    Type: 'AWS::EC2::InternetGateway'
-    Properties: {}
-
-  VPCGatewayAttachment:
-    Type: 'AWS::EC2::VPCGatewayAttachment'
-    Properties:
-      VpcId: !Ref VPC
-      InternetGatewayId: !Ref InternetGateway
-
-  SubnetA:
-    Type: 'AWS::EC2::Subnet'
-    Properties:
-      AvailabilityZone: !Select [0, !GetAZs '']
-      CidrBlock: '172.31.38.0/24'
-      VpcId: !Ref VPC
-
-  SubnetB:
-    Type: 'AWS::EC2::Subnet'
-    Properties:
-      AvailabilityZone: !Select [1, !GetAZs '']
-      CidrBlock: '172.31.37.0/24'
-      VpcId: !Ref VPC
-
-  RouteTable:
-    Type: 'AWS::EC2::RouteTable'
-    Properties:
-      VpcId: !Ref VPC
-
-  RouteTableAssociationA:
-    Type: 'AWS::EC2::SubnetRouteTableAssociation'
-    Properties:
-      SubnetId: !Ref SubnetA
-      RouteTableId: !Ref RouteTable
-
-  RouteTableAssociationB:
-    Type: 'AWS::EC2::SubnetRouteTableAssociation'
-    Properties:
-      SubnetId: !Ref SubnetB
-      RouteTableId: !Ref RouteTable
-
-  RoutePublicToInternet:
-    DependsOn: VPCGatewayAttachment
-    Type: 'AWS::EC2::Route'
-    Properties:
-      RouteTableId: !Ref RouteTable
-      DestinationCidrBlock: '0.0.0.0/0'
-      GatewayId: !Ref InternetGateway
+  # ===================== Network =====================
+  # The VPC, subnets, IGW, and routing now live in the durable `login-demo-network`
+  # stack (zero idle cost, deploy-once). This stack imports them via Fn::ImportValue
+  # so the app can be created/destroyed freely without touching the network.
+  # Idiom: `Fn::ImportValue` (long form) wrapping `!Sub` (shorthand) — the two
+  # shorthand tags can't nest, so ImportValue must be long form here.
 
   # ===================== Security groups =====================
   LoadBalancerSecurityGroup:
     Type: 'AWS::EC2::SecurityGroup'
     Properties:
       GroupDescription: !Sub '${AWS::StackName}-alb'
-      VpcId: !Ref VPC
+      VpcId:
+        Fn::ImportValue: !Sub '${NetworkStackName}-VpcId'
       SecurityGroupIngress:
         - CidrIp: '0.0.0.0/0'
           FromPort: 80
@@ -104,7 +65,8 @@ Resources:
     Type: 'AWS::EC2::SecurityGroup'
     Properties:
       GroupDescription: !Sub '${AWS::StackName}-service'
-      VpcId: !Ref VPC
+      VpcId:
+        Fn::ImportValue: !Sub '${NetworkStackName}-VpcId'
       SecurityGroupIngress:
         - SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
           FromPort: 80
@@ -116,8 +78,9 @@ Resources:
           IpProtocol: tcp
 
   # ===================== Load balancer + routing =====================
+  # No more DependsOn: VPCGatewayAttachment — the IGW is attached in the network
+  # stack (already CREATE_COMPLETE), so the internet-facing ALB's requirement is met.
   LoadBalancer:
-    DependsOn: VPCGatewayAttachment
     Type: 'AWS::ElasticLoadBalancingV2::LoadBalancer'
     Properties:
       Scheme: 'internet-facing'
@@ -125,8 +88,8 @@ Resources:
       SecurityGroups:
         - !Ref LoadBalancerSecurityGroup
       Subnets:
-        - !Ref SubnetA
-        - !Ref SubnetB
+        - Fn::ImportValue: !Sub '${NetworkStackName}-SubnetAId'
+        - Fn::ImportValue: !Sub '${NetworkStackName}-SubnetBId'
 
   # Default: everything -> frontend. (API split is a higher-priority rule below.)
   HttpListener:
@@ -156,7 +119,8 @@ Resources:
   FrontendTargetGroup:
     Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
     Properties:
-      VpcId: !Ref VPC
+      VpcId:
+        Fn::ImportValue: !Sub '${NetworkStackName}-VpcId'
       Port: 80
       Protocol: HTTP
       TargetType: ip                       # Fargate = register by task ENI IP
@@ -174,7 +138,8 @@ Resources:
   BackendTargetGroup:
     Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
     Properties:
-      VpcId: !Ref VPC
+      VpcId:
+        Fn::ImportValue: !Sub '${NetworkStackName}-VpcId'
       Port: 3000
       Protocol: HTTP
       TargetType: ip
@@ -195,17 +160,15 @@ Resources:
   # session costs pennies. Sessions are throwaway — losing the cache on
   # teardown is the intended behaviour, not a loss.
 
-  # Which subnets ElastiCache may place the node in. Reuses the existing
-  # two — Redis needs no internet access, and in-VPC routing is automatic
-  # via the VPC's implicit local route, so no NAT and no new subnets.
+  # Which subnets ElastiCache may place the node in — imported from the network stack.
   RedisSubnetGroup:
     Type: 'AWS::ElastiCache::SubnetGroup'
     Properties:
       CacheSubnetGroupName: !Sub '${AWS::StackName}-redis'
       Description: 'Subnets ElastiCache may place the Redis node in.'
       SubnetIds:
-        - !Ref SubnetA
-        - !Ref SubnetB
+        - Fn::ImportValue: !Sub '${NetworkStackName}-SubnetAId'
+        - Fn::ImportValue: !Sub '${NetworkStackName}-SubnetBId'
 
   # SG chaining: only things in ServiceSecurityGroup may reach 6379.
   # No password — in-VPC access control IS the security boundary here.
@@ -214,7 +177,8 @@ Resources:
     Type: 'AWS::EC2::SecurityGroup'
     Properties:
       GroupDescription: !Sub '${AWS::StackName}-redis'
-      VpcId: !Ref VPC
+      VpcId:
+        Fn::ImportValue: !Sub '${NetworkStackName}-VpcId'
       SecurityGroupIngress:
         - SourceSecurityGroupId: !Ref ServiceSecurityGroup
           FromPort: 6379
@@ -287,14 +251,15 @@ Resources:
       ManagedPolicyArns:
         - 'arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
       Policies:
-        - PolicyName: 'read-session-secret'
+        - PolicyName: 'read-secrets'
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              # Scoped to this one secret — not secretsmanager:* on '*'.
               - Effect: Allow
                 Action: 'secretsmanager:GetSecretValue'
-                Resource: !Ref SessionSecret
+                Resource:
+                  - !Ref SessionSecret
+                  - Fn::ImportValue: !Sub '${DataStackName}-DbSecretArn'
 
   # Task role = what the RUNNING container assumes for its own AWS calls
   # (distinct from the execution role, which Fargate uses to START the task).
@@ -356,15 +321,30 @@ Resources:
             - Name: PORT
               Value: '3000'
             - Name: COOKIE_SECURE
-              Value: 'false'           # ALB is plain HTTP :80 (no TLS) for this demo
+              Value: 'false'
             - Name: REDIS_URL
               Value: !Sub 'redis://${RedisReplicationGroup.PrimaryEndPoint.Address}:${RedisReplicationGroup.PrimaryEndPoint.Port}'
+            - Name: DB_HOST
+              Value:
+                Fn::ImportValue: !Sub '${DataStackName}-DbEndpoint'
+            - Name: DB_PORT
+              Value:
+                Fn::ImportValue: !Sub '${DataStackName}-DbPort'
+            - Name: DB_NAME
+              Value:
+                Fn::ImportValue: !Sub '${DataStackName}-DbName'
           # Secrets = resolved at task start by the EXECUTION role and injected as
           # env vars. The value never appears in the template, the console, or git.
           # The app reads it exactly like any other process.env value.
           Secrets:
             - Name: SESSION_SECRET
               ValueFrom: !Ref SessionSecret
+            - Name: DB_PASSWORD
+              ValueFrom:
+                Fn::Sub:
+                  - '${SecretArn}:password::'
+                  - SecretArn:
+                      Fn::ImportValue: !Sub '${DataStackName}-DbSecretArn'
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -402,8 +382,11 @@ Resources:
         AwsvpcConfiguration:
           AssignPublicIp: 'ENABLED'      # public subnet + public IP = no NAT gateway
           SecurityGroups:
-            - !Ref ServiceSecurityGroup
-          Subnets: [!Ref SubnetA, !Ref SubnetB]
+            - !Ref ServiceSecurityGroup                              # ALB -> task (inbound)
+            - Fn::ImportValue: !Sub '${DataStackName}-DbClientSgId'  # task -> DB (this is the client SG finally getting worn)
+          Subnets:
+            - Fn::ImportValue: !Sub '${NetworkStackName}-SubnetAId'
+            - Fn::ImportValue: !Sub '${NetworkStackName}-SubnetBId'
 
   # ===================== Frontend task + service =====================
   FrontendTaskDefinition:
@@ -457,7 +440,9 @@ Resources:
           AssignPublicIp: 'ENABLED'
           SecurityGroups:
             - !Ref ServiceSecurityGroup
-          Subnets: [!Ref SubnetA, !Ref SubnetB]
+          Subnets:
+            - Fn::ImportValue: !Sub '${NetworkStackName}-SubnetAId'
+            - Fn::ImportValue: !Sub '${NetworkStackName}-SubnetBId'
 
   # ===================== Observability: SNS topic + email =====================
   # The topic is the fan-out point: alarms publish here, subscribers receive.
