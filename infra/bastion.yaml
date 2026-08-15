@@ -1,0 +1,93 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'login-demo bastion — SSM-managed private t3.micro for GUI tunneling to private RDS (5432). No public inbound, no SSH key. Session-scoped: create when you need GUI access, stop or delete when done. Imports the network + the DB client SG.'
+
+# ============================================================================
+# WHY THIS EXISTS
+# ----------------------------------------------------------------------------
+# RDS is PubliclyAccessible: false — nothing on your laptop reaches it directly.
+# Industry-standard access is SSM Session Manager port-forwarding THROUGH a
+# private host: laptop -> (SSM: outbound-only, IAM-gated, TLS, CloudTrail-audited)
+# -> this instance -> the RDS endpoint. Then any GUI (DBeaver / TablePlus /
+# pgAdmin) connects to localhost:5432.
+#
+# SECURITY POSTURE
+#   - No SecurityGroupIngress at all. SSM needs none — the agent dials OUT to
+#     AWS. Nothing can connect TO this box. No SSH, no key pair.
+#   - Carries the DB client SG (imported) so it may reach Postgres on 5432,
+#     exactly like the backend tasks do.
+#
+# COST: t3.micro ~= $7.50/mo IF LEFT RUNNING. Stop it when idle (a stopped
+# instance bills only its ~8GB EBS, pennies), or delete this whole stack.
+# ============================================================================
+
+Parameters:
+  NetworkStackName:
+    Type: String
+    Default: 'login-demo-network'
+    Description: 'Network stack to import the VPC/subnet from.'
+  DataStackName:
+    Type: String
+    Default: 'login-demo-data'
+    Description: 'Data stack to import the DB client SG from (grants Postgres reach).'
+  LatestAmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64'
+    Description: 'Always the current Amazon Linux 2023 AMI — resolved from the public SSM parameter, never hardcoded.'
+
+Resources:
+
+  # The instance's own SG. NO ingress — SSM does not need any inbound. Default
+  # egress (allow-all) lets the SSM agent reach AWS and lets us reach 5432.
+  BastionSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: !Sub '${AWS::StackName}-bastion (no ingress; SSM outbound only)'
+      VpcId:
+        Fn::ImportValue: !Sub '${NetworkStackName}-VpcId'
+
+  # Role that lets the SSM agent register + run sessions. The AWS-managed
+  # AmazonSSMManagedInstanceCore policy is exactly this scope, nothing more.
+  BastionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: 'ec2.amazonaws.com'
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore'
+
+  BastionInstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Roles:
+        - !Ref BastionRole
+
+  Bastion:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: 't3.micro'
+      IamInstanceProfile: !Ref BastionInstanceProfile
+      # Public IP is only so the SSM agent has an outbound path (this VPC has no
+      # NAT). The box still has NO inbound rules, so it is not reachable from
+      # anywhere — access is exclusively via the SSM agent's outbound tunnel.
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          AssociatePublicIpAddress: true
+          DeleteOnTermination: true
+          SubnetId:
+            Fn::ImportValue: !Sub '${NetworkStackName}-SubnetAId'
+          GroupSet:
+            - !Ref BastionSecurityGroup
+            - Fn::ImportValue: !Sub '${DataStackName}-DbClientSgId'   # badge to reach Postgres 5432
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-bastion'
+
+Outputs:
+  BastionInstanceId:
+    Description: 'Instance id — this is the --target for the SSM port-forward session.'
+    Value: !Ref Bastion

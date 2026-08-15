@@ -1,0 +1,139 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'login-demo data stack — Postgres on RDS (single-AZ, private). A 3rd lifecycle: durable data, session-scoped for cost via snapshot-on-delete + restore-from-snapshot. Imports the VPC/subnets from login-demo-network. Exports endpoint + managed-secret ARN + a client SG for the app to join.'
+
+# ============================================================================
+# LIFECYCLE + COST
+# ----------------------------------------------------------------------------
+# RDS has no true "off" (~$12-15/mo for db.t3.micro if left up). So this stack
+# is built to be created/torn-down per dress-rehearsal session WITHOUT losing
+# data: DeletionPolicy/UpdateReplacePolicy: Snapshot take a final snapshot on
+# delete, and DBSnapshotIdentifier restores from one on create. Round-trip:
+#   create blank -> migrate -> insert -> (app redeploy survives) ->
+#   delete (final snapshot taken) -> recreate with DBSnapshotIdentifier -> data back.
+#
+# CROSS-STACK ACCESS (the tricky part)
+# ----------------------------------------------------------------------------
+# The DB SG must admit the app's tasks, but the app stack is EPHEMERAL and
+# created AFTER this one — so this stack can't import the app's SG (wrong order),
+# and the app can't add a rule to an SG it doesn't own. Resolution: this stack
+# owns an empty "DbClient" SG and exports it; the DB SG admits 5432 only from
+# that client SG; the app attaches the client SG to its tasks. Dependency flows
+# the correct way (app -> data -> network), and it stays least-privilege.
+# ============================================================================
+
+Parameters:
+  NetworkStackName:
+    Type: String
+    Default: 'login-demo-network'
+    Description: 'Durable network stack to import the VPC/subnets from.'
+  DBInstanceClass:
+    Type: String
+    Default: 'db.t3.micro'
+    Description: 'RDS instance class. t3.micro is the cheap learning default.'
+  DBSnapshotIdentifier:
+    Type: String
+    Default: ''
+    Description: 'Leave BLANK for a fresh blank DB. Set to a snapshot id/ARN to RESTORE from it (this is how data survives a teardown). On restore, master user + db name come from the snapshot, so those properties are skipped below.'
+
+Conditions:
+  # Everything that must be skipped when restoring keys off this.
+  FromSnapshot: !Not [!Equals [!Ref DBSnapshotIdentifier, '']]
+
+Resources:
+
+  # Which subnets RDS may place the node in — imported from the network stack.
+  # Needs >=2 AZs even for a single-AZ instance.
+  DbSubnetGroup:
+    Type: 'AWS::RDS::DBSubnetGroup'
+    Properties:
+      DBSubnetGroupDescription: !Sub '${AWS::StackName} db subnets'
+      SubnetIds:
+        - Fn::ImportValue: !Sub '${NetworkStackName}-SubnetAId'
+        - Fn::ImportValue: !Sub '${NetworkStackName}-SubnetBId'
+
+  # Empty SG that grants DB access by membership. The app attaches this to its
+  # tasks (imports DbClientSgId). Owning it here fixes the create-order problem.
+  DbClientSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: !Sub '${AWS::StackName}-db-client (attach to anything that needs Postgres)'
+      VpcId:
+        Fn::ImportValue: !Sub '${NetworkStackName}-VpcId'
+
+  # The DB's own SG — admits 5432 only from members of the client SG.
+  DbSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: !Sub '${AWS::StackName}-db'
+      VpcId:
+        Fn::ImportValue: !Sub '${NetworkStackName}-VpcId'
+      SecurityGroupIngress:
+        - SourceSecurityGroupId: !Ref DbClientSecurityGroup
+          FromPort: 5432
+          ToPort: 5432
+          IpProtocol: tcp
+
+  Database:
+    Type: 'AWS::RDS::DBInstance'
+    # Final snapshot on delete AND on any replace — this is what makes teardown
+    # non-destructive. CFN auto-names the final snapshot; read it after delete
+    # and pass it back as DBSnapshotIdentifier to restore.
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      Engine: postgres
+      # Pinned major; RDS picks the latest minor. If this version is rejected,
+      # list valid ones: aws rds describe-db-engine-versions --engine postgres \
+      #   --query 'DBEngineVersions[-1].EngineVersion' --output text
+      EngineVersion: '16.11'
+      DBInstanceClass: !Ref DBInstanceClass
+      AllocatedStorage: '20'
+      StorageType: gp3
+      # Encryption comes from the snapshot on restore, so only set it on create.
+      StorageEncrypted: !If [FromSnapshot, !Ref 'AWS::NoValue', true]
+      # db name + master user come from the snapshot on restore -> skip them then.
+      DBName: !If [FromSnapshot, !Ref 'AWS::NoValue', 'logindemo']
+      MasterUsername: !If [FromSnapshot, !Ref 'AWS::NoValue', 'appuser']
+      # Modern standard: let RDS create + rotate the master password in Secrets
+      # Manager and expose it as MasterUserSecret.SecretArn. Solves the snapshot
+      # mismatch too — on restore RDS resets/manages the password, so the app
+      # always reads the current one from the exported ARN (no stale-secret drift).
+      ManageMasterUserPassword: true
+      DBSnapshotIdentifier: !If [FromSnapshot, !Ref DBSnapshotIdentifier, !Ref 'AWS::NoValue']
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      VPCSecurityGroups:
+        - !GetAtt DbSecurityGroup.GroupId
+      PubliclyAccessible: false           # in-VPC only; reached via the client SG
+      MultiAZ: false                      # single-AZ = cheap; fine for a demo
+      BackupRetentionPeriod: 1            # minimal automated backups
+
+Outputs:
+  DbEndpointAddress:
+    Description: 'RDS endpoint host'
+    Value: !GetAtt Database.Endpoint.Address
+    Export:
+      Name: !Sub '${AWS::StackName}-DbEndpoint'
+
+  DbEndpointPort:
+    Description: 'RDS endpoint port'
+    Value: !GetAtt Database.Endpoint.Port
+    Export:
+      Name: !Sub '${AWS::StackName}-DbPort'
+
+  DbName:
+    Description: 'Database name (constant across restores)'
+    Value: 'logindemo'
+    Export:
+      Name: !Sub '${AWS::StackName}-DbName'
+
+  DbSecretArn:
+    Description: 'Secrets Manager ARN of the RDS-managed master credentials (JSON: username, password). App reads the password key via the ECS Secrets block.'
+    Value: !GetAtt Database.MasterUserSecret.SecretArn
+    Export:
+      Name: !Sub '${AWS::StackName}-DbSecretArn'
+
+  DbClientSecurityGroupId:
+    Description: 'Attach this SG to anything that needs to reach Postgres (the app tasks import + attach it).'
+    Value: !Ref DbClientSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-DbClientSgId'
