@@ -62,3 +62,4 @@ src/generated/prisma
 .agents/
 .claude/
 .windsurf/
+skills-lock.json
