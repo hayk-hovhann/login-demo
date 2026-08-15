@@ -4,6 +4,8 @@ import { createClient } from 'redis';
 import RedisStore from 'connect-redis';
 import { AppModule } from './app.module';
 import { ConfigService } from '@nestjs/config';
+import { ValidationPipe } from '@nestjs/common';
+import passport from 'passport';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -11,6 +13,13 @@ async function bootstrap() {
 
   // All routes are served under /api (so the ALB / nginx can route /api/* here)
   app.setGlobalPrefix('api');
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+    }),
+  );
 
   const redisClient = createClient({
     url: config.getOrThrow<string>('REDIS_URL'),
@@ -45,6 +54,8 @@ async function bootstrap() {
       },
     }),
   );
+  app.use(passport.initialize());
+  app.use(passport.session());
 
   const port = config.get<number>('PORT')!;
   await app.listen(config.get<number>('PORT')!, '0.0.0.0');

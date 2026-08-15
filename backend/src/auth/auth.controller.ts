@@ -1,34 +1,51 @@
-import { Body, Controller, Get, Post, Req } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Post,
+  Req,
+  UseGuards,
+  ForbiddenException,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import type { Request } from 'express';
 import { AuthService } from './auth.service';
-
-interface LoginDto {
-  username: string;
-  password: string;
-}
+import { RegisterDto } from './dto/register.dto';
+import { LocalAuthGuard } from './guards/local-auth.guard';
+import { AuthenticatedGuard } from './guards/authenticated.guard';
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly config: ConfigService,
+  ) {}
 
-  // POST /api/auth/login  -> validate creds, store user on the session
-  @Post('login')
-  login(@Body() body: LoginDto, @Req() req: Request) {
-    const user = this.authService.validate(body?.username, body?.password);
-    req.session.user = user;
-    return { ok: true, user };
+  @Post('register')
+  async register(@Body() body: RegisterDto) {
+    if (!this.config.get<boolean>('REGISTRATION_ENABLED'))
+      throw new ForbiddenException('registration disabled');
+    return this.authService.register(body.username, body.password);
   }
 
-  // GET /api/auth/me  -> who am I? (reads the session cookie)
+  @UseGuards(LocalAuthGuard) // guard validates creds + logs in; body consumed by passport
+  @Post('login')
+  login(@Req() req: Request) {
+    return { ok: true, user: req.user };
+  }
+
+  @UseGuards(AuthenticatedGuard) // 403 if no valid session
   @Get('me')
   me(@Req() req: Request) {
-    return { user: req.session.user ?? null };
+    return { user: req.user };
   }
 
-  // POST /api/auth/logout  -> clear the session
   @Post('logout')
   logout(@Req() req: Request) {
-    req.session.destroy(() => undefined);
+    req.logout((err) => {
+      if (err) return;
+      req.session.destroy(() => undefined);
+    });
     return { ok: true };
   }
 }

@@ -10,17 +10,51 @@ services:
       interval: 5s
       retries: 5
 
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: appuser
+      POSTGRES_PASSWORD: password123
+      POSTGRES_DB: logindemo
+    ports: [ "5432:5432" ]
+    volumes: [ "pgdata:/var/lib/postgresql/data" ]
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U appuser -d logindemo" ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  adminer:
+    image: adminer:latest
+    ports: [ "8081:8080" ]        # http://localhost:8081
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    ports: [ "8082:8081" ]        # http://localhost:8082
+    depends_on:
+      redis:
+        condition: service_healthy
+
   backend:
     build: ./backend
     environment:
       - PORT=3000
       - SESSION_SECRET=dev-secret-change-me
-      - COOKIE_SECURE=false            # true only when served over HTTPS
-      - REDIS_URL=redis://redis:6379   # compose DNS resolves the service name
+      - COOKIE_SECURE=false
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql://appuser:password123@postgres:5432/logindemo
+      - REGISTRATION_ENABLED=true
     expose:
-      - "3000"                         # visible to other compose services, not the host
+      - "3000"
     depends_on:
       redis:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
 
   frontend:
@@ -29,3 +63,6 @@ services:
       - "8080:80"                      # http://localhost:8080
     depends_on:
       - backend
+
+volumes:
+  pgdata: { }

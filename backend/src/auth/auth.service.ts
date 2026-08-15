@@ -1,17 +1,40 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  Injectable,
+  ConflictException,
+  UnauthorizedException,
+} from '@nestjs/common';
+import * as bcrypt from 'bcryptjs';
+import { Prisma } from '../generated/prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class AuthService {
-  // In-memory user store (no DB yet). Seeded with one demo user.
-  // CAVEAT: memory-only — resets on restart, and is NOT shared across replicas.
-  // A real store (Postgres / Redis) is the next lesson this sets up.
-  private readonly users = new Map<string, string>([['demo', 'password123']]);
+  constructor(private readonly prisma: PrismaService) {}
 
-  validate(username: string, password: string): { username: string } {
-    const stored = this.users.get(username);
-    if (!stored || stored !== password) {
-      throw new UnauthorizedException('Invalid username or password');
+  async register(username: string, password: string) {
+    const passwordHash = await bcrypt.hash(password, 10);
+    try {
+      return await this.prisma.user.create({
+        data: { username, passwordHash },
+        select: { id: true, username: true, createdAt: true },
+      });
+    } catch (e) {
+      if (
+        e instanceof Prisma.PrismaClientKnownRequestError &&
+        e.code === 'P2002'
+      )
+        throw new ConflictException('username already taken');
+      throw e;
     }
-    return { username };
+  }
+
+  async validateUser(
+    username: string,
+    password: string,
+  ): Promise<{ username: string }> {
+    const user = await this.prisma.user.findUnique({ where: { username } });
+    if (!user || !(await bcrypt.compare(password, user.passwordHash)))
+      throw new UnauthorizedException('Invalid username or password');
+    return { username: user.username };
   }
 }
