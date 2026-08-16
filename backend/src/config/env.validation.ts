@@ -3,8 +3,15 @@ import { z } from 'zod';
 const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
   REDIS_URL: z.url(),
-  SESSION_SECRET: z.string().min(16, 'SESSION_SECRET must be at least 16 chars'),
+  SESSION_SECRET: z
+    .string()
+    .min(16, 'SESSION_SECRET must be at least 16 chars'),
   COOKIE_SECURE: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  DATABASE_URL: z.url(),
+  REGISTRATION_ENABLED: z
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),

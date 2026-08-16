@@ -54,3 +54,12 @@ pids
 
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+/generated/prisma
+src/generated/prisma
+
+# Prisma v7 init scaffolds agent skills here; .claude/.windsurf symlink into it
+.agents/
+.claude/
+.windsurf/
+skills-lock.json

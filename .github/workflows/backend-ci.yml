@@ -26,6 +26,12 @@ jobs:
       - name: Install deps
         run: npm ci
 
+      # src/generated/prisma is gitignored, so a fresh checkout has no client.
+      # Without this, type-aware ESLint can't resolve the Prisma imports and
+      # floods no-unsafe-* errors; typecheck and build fail right after.
+      - name: Generate Prisma client
+        run: npx prisma generate
+
       - name: Lint
         run: npm run lint
 

@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Prisma v7 init scaffolds agent skills here; .claude/.windsurf symlink into it
+.agents/
+.claude/
+.windsurf/
