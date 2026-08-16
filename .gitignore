@@ -17,3 +17,7 @@ npm-debug.log*
 .DS_Store
 .vscode/
 .idea/
+
+# claude code context system (local only)
+CLAUDE.md
+.claude/
