@@ -424,6 +424,25 @@ Resources:
             - Name: DB_NAME
               Value:
                 Fn::ImportValue: !Sub '${DataStackName}-DbName'
+            # RDS runs with rds.force_ssl=1 (the Postgres 16 system default), but
+            # node-postgres defaults to a PLAINTEXT socket — PrismaPg passes only
+            # host/port/database/user/password and no `ssl` key. RDS then rejects
+            # at the pg_hba stage with "no encryption", which surfaces through
+            # Prisma as P1010 "User was denied access" and reads like bad
+            # credentials. It is not: the credentials are fine, the transport is.
+            #
+            # node-postgres reads PGSSLMODE from the environment whenever the
+            # config object omits `ssl`, so this fixes it without touching code.
+            # `no-verify` (not `require`) because the RDS CA is not in Node's
+            # trust store — plain `require` fails with "self-signed certificate
+            # in certificate chain". Traffic is encrypted; the server cert is not
+            # verified. Bundling the RDS CA and moving to verify-full is the
+            # proper follow-up.
+            #
+            # Deliberately set HERE and not in docker-compose: local Postgres
+            # has no TLS, so this must stay environment-scoped.
+            - Name: PGSSLMODE
+              Value: 'no-verify'
             - Name: REGISTRATION_ENABLED
               Value: !Ref RegistrationEnabled
           # Secrets = resolved at task start by the EXECUTION role and injected as
