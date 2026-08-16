@@ -203,6 +203,11 @@ Resources:
   # the slowest resource in the stack (~10-15 min to create).
   RedisReplicationGroup:
     Type: 'AWS::ElastiCache::ReplicationGroup'
+    # Explicit and deliberate: this stack is EPHEMERAL, so everything in it goes
+    # on teardown. Contrast infra/data.yaml, where the DB is Snapshot — that is
+    # the one thing worth keeping. Sessions are disposable by design.
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
       ReplicationGroupDescription: !Sub '${AWS::StackName} session store'
       Engine: redis
@@ -229,6 +234,10 @@ Resources:
   # name sidesteps that entirely, and nothing greps for this one.
   SessionSecret:
     Type: 'AWS::SecretsManager::Secret'
+    # Delete on teardown. Secrets Manager still holds it for a 7-day recovery
+    # window, which is exactly why `Name` above is left unpinned.
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
       Description: !Sub 'express-session signing key for ${AWS::StackName}'
       GenerateSecretString:
@@ -300,16 +309,28 @@ Resources:
   # ===================== Logs =====================
   BackendLogGroup:
     Type: 'AWS::Logs::LogGroup'
+    # Logs die with the stack — retention is 7 days anyway, and keeping
+    # orphaned log groups around is a silent CloudWatch cost.
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
       RetentionInDays: 7
 
   FrontendLogGroup:
     Type: 'AWS::Logs::LogGroup'
+    # Logs die with the stack — retention is 7 days anyway, and keeping
+    # orphaned log groups around is a silent CloudWatch cost.
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
       RetentionInDays: 7
 
   MigrateLogGroup:
     Type: 'AWS::Logs::LogGroup'
+    # Logs die with the stack — retention is 7 days anyway, and keeping
+    # orphaned log groups around is a silent CloudWatch cost.
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
       RetentionInDays: 7
 
@@ -675,16 +696,9 @@ Outputs:
   AlarmTopicArn:
     Description: 'SNS topic that both alarms publish to'
     Value: !Ref AlarmTopic
-  MigrateCommand:
-    Description: 'Run pending Prisma migrations as a one-shot Fargate task. assignPublicIp=ENABLED is REQUIRED — tasks sit in public subnets and there is no NAT, so without it the task cannot reach ECR or Secrets Manager and fails with ResourceInitializationError (which looks like an IAM problem but is not).'
-    Value: !Sub
-      - 'aws ecs run-task --cluster ${AWS::StackName}-Cluster --task-definition ${AWS::StackName}-migrate --launch-type FARGATE --started-by manual-migrate --network-configuration "awsvpcConfiguration={subnets=[${SubnetA},${SubnetB}],securityGroups=[${DbClientSg}],assignPublicIp=ENABLED}"'
-      - SubnetA:
-          Fn::ImportValue: !Sub '${NetworkStackName}-SubnetAId'
-        SubnetB:
-          Fn::ImportValue: !Sub '${NetworkStackName}-SubnetBId'
-        DbClientSg:
-          Fn::ImportValue: !Sub '${DataStackName}-DbClientSgId'
+  MigrateTaskDefinitionFamily:
+    Description: 'Family of the one-shot Prisma migration task. Run it with ./infra/run-migration.sh, which resolves subnets and the DB client SG from the stack exports, waits for the task, and reports its exit code.'
+    Value: !Sub '${AWS::StackName}-migrate'
   MigrateLogGroupName:
     Description: 'CloudWatch log group for the migration task'
     Value: !Ref MigrateLogGroup
