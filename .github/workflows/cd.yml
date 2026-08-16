@@ -74,9 +74,17 @@ jobs:
           SHA: ${{ github.sha }}
         run: |
           docker build -t "$REGISTRY/$REPO:$SHA" -t "$REGISTRY/$REPO:latest" ./backend
+          # Migration image: same repo, migrate- tag prefix, so ci-ecr (permanent)
+          # needs no change — ecr:PutImage is scoped to the repo ARN, all tags.
+          # MigrateTaskDefinition pulls migrate-${BackendImageTag}, keeping schema
+          # and code on the same commit.
+          docker build --target migrate \
+            -t "$REGISTRY/$REPO:migrate-$SHA" -t "$REGISTRY/$REPO:migrate-latest" ./backend
           docker push "$REGISTRY/$REPO:$SHA"
           docker push "$REGISTRY/$REPO:latest"
-          echo "Pushed $REGISTRY/$REPO:$SHA and :latest"
+          docker push "$REGISTRY/$REPO:migrate-$SHA"
+          docker push "$REGISTRY/$REPO:migrate-latest"
+          echo "Pushed $REGISTRY/$REPO:{$SHA,latest,migrate-$SHA,migrate-latest}"
 
   # 3) Backend: deploy the new image to ECS (SHA-pinned). Runs after the push.
   backend-deploy:

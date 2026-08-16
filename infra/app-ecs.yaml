@@ -29,6 +29,12 @@ Parameters:
     Default: 'login-demo-data'
     Description: 'Name of the data stack to import the DB endpoint, secret, and client SG from.'
 
+  RegistrationEnabled:
+    Type: String
+    Default: 'true'
+    AllowedValues: [ 'true', 'false' ]
+    Description: 'Allow POST /api/auth/register. Defaults TRUE on purpose: each session starts from a fresh or snapshot-restored DB with no seeding path on ECS, so the frontend Register tab is the only way in — and parameters omitted on update-stack revert to the TEMPLATE DEFAULT, so a forgotten flag stays harmless. Flip to false to demonstrate the gate.'
+
 Conditions:
   # Only create the email subscription when an address was actually provided.
   # The topic and alarms exist either way; this just controls delivery.
@@ -143,7 +149,11 @@ Resources:
       Port: 3000
       Protocol: HTTP
       TargetType: ip
-      HealthCheckPath: '/api/auth/me'      # returns 200 {"user":null} -> healthy
+      # Liveness only, and deliberately never touches Postgres — that is what
+      # lets tasks go healthy BEFORE the migration task has run.
+      # NOT /api/auth/me: AuthenticatedGuard makes it 403 when anonymous, which
+      # is outside the matcher below, so no task could ever register healthy.
+      HealthCheckPath: '/api/health'
       HealthCheckIntervalSeconds: 15
       HealthCheckTimeoutSeconds: 10
       HealthyThresholdCount: 2
@@ -298,6 +308,66 @@ Resources:
     Properties:
       RetentionInDays: 7
 
+  MigrateLogGroup:
+    Type: 'AWS::Logs::LogGroup'
+    Properties:
+      RetentionInDays: 7
+
+  # ===================== Migration task (run on demand) =====================
+  # NOT a Service — nothing runs until you `aws ecs run-task` it; see the
+  # MigrateCommand output for the ready-made invocation. Task definitions are
+  # free to define; only running tasks bill.
+  #
+  # Deliberately NOT an init container on the backend task: a failed migration
+  # there blocks task start, which trips the deployment circuit breaker, whose
+  # rollback deletes the logs you need to diagnose it. A standalone task stops
+  # cleanly and keeps its log stream and exit code.
+  #
+  # The image tag derives from BackendImageTag so schema and the code that
+  # depends on it always come from the same commit.
+  MigrateTaskDefinition:
+    Type: 'AWS::ECS::TaskDefinition'
+    Properties:
+      Family: !Sub '${AWS::StackName}-migrate'
+      Cpu: 256
+      Memory: 512
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [ FARGATE ]
+      ExecutionRoleArn: !GetAtt 'TaskExecutionRole.Arn'
+      ContainerDefinitions:
+        - Name: migrate
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/login-demo-backend:migrate-${BackendImageTag}'
+          Essential: true
+          Environment:
+            - Name: DB_HOST
+              Value:
+                Fn::ImportValue: !Sub '${DataStackName}-DbEndpoint'
+            - Name: DB_PORT
+              Value:
+                Fn::ImportValue: !Sub '${DataStackName}-DbPort'
+            - Name: DB_NAME
+              Value:
+                Fn::ImportValue: !Sub '${DataStackName}-DbName'
+          Secrets:
+            - Name: DB_USER
+              ValueFrom:
+                Fn::Sub:
+                  - '${SecretArn}:username::'
+                  - SecretArn:
+                      Fn::ImportValue: !Sub '${DataStackName}-DbSecretArn'
+            - Name: DB_PASSWORD
+              ValueFrom:
+                Fn::Sub:
+                  - '${SecretArn}:password::'
+                  - SecretArn:
+                      Fn::ImportValue: !Sub '${DataStackName}-DbSecretArn'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-region: !Ref 'AWS::Region'
+              awslogs-group: !Ref MigrateLogGroup
+              awslogs-stream-prefix: migrate
+
   # ===================== Backend task + service =====================
   BackendTaskDefinition:
     Type: 'AWS::ECS::TaskDefinition'
@@ -333,12 +403,24 @@ Resources:
             - Name: DB_NAME
               Value:
                 Fn::ImportValue: !Sub '${DataStackName}-DbName'
+            - Name: REGISTRATION_ENABLED
+              Value: !Ref RegistrationEnabled
           # Secrets = resolved at task start by the EXECUTION role and injected as
           # env vars. The value never appears in the template, the console, or git.
           # The app reads it exactly like any other process.env value.
           Secrets:
             - Name: SESSION_SECRET
               ValueFrom: !Ref SessionSecret
+            # RDS-managed secret — the JSON has `username` and `password` keys.
+            # Suffix form is <arn>:<json-key>:<version-stage>:<version-id>, the
+            # last two left empty. Reading the username from the secret rather
+            # than hardcoding 'appuser' keeps it correct across snapshot restores.
+            - Name: DB_USER
+              ValueFrom:
+                Fn::Sub:
+                  - '${SecretArn}:username::'
+                  - SecretArn:
+                      Fn::ImportValue: !Sub '${DataStackName}-DbSecretArn'
             - Name: DB_PASSWORD
               ValueFrom:
                 Fn::Sub:
@@ -593,3 +675,16 @@ Outputs:
   AlarmTopicArn:
     Description: 'SNS topic that both alarms publish to'
     Value: !Ref AlarmTopic
+  MigrateCommand:
+    Description: 'Run pending Prisma migrations as a one-shot Fargate task. assignPublicIp=ENABLED is REQUIRED — tasks sit in public subnets and there is no NAT, so without it the task cannot reach ECR or Secrets Manager and fails with ResourceInitializationError (which looks like an IAM problem but is not).'
+    Value: !Sub
+      - 'aws ecs run-task --cluster ${AWS::StackName}-Cluster --task-definition ${AWS::StackName}-migrate --launch-type FARGATE --started-by manual-migrate --network-configuration "awsvpcConfiguration={subnets=[${SubnetA},${SubnetB}],securityGroups=[${DbClientSg}],assignPublicIp=ENABLED}"'
+      - SubnetA:
+          Fn::ImportValue: !Sub '${NetworkStackName}-SubnetAId'
+        SubnetB:
+          Fn::ImportValue: !Sub '${NetworkStackName}-SubnetBId'
+        DbClientSg:
+          Fn::ImportValue: !Sub '${DataStackName}-DbClientSgId'
+  MigrateLogGroupName:
+    Description: 'CloudWatch log group for the migration task'
+    Value: !Ref MigrateLogGroup
