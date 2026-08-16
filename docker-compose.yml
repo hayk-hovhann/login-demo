@@ -51,7 +51,13 @@ services:
       - SESSION_SECRET=dev-secret-change-me
       - COOKIE_SECURE=false
       - REDIS_URL=redis://redis:6379
-      - DATABASE_URL=postgresql://appuser:password123@postgres:5432/logindemo
+      # discrete DB_* on purpose — the same shape ECS injects, so the config
+      # path that runs on AWS is the one exercised locally
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=logindemo
+      - DB_USER=appuser
+      - DB_PASSWORD=password123
       - REGISTRATION_ENABLED=true
     expose:
       - "3000"
@@ -67,6 +73,24 @@ services:
       - "8080:80"                      # http://localhost:8080
     depends_on:
       - backend
+
+  # One-shot Prisma migration — the same image that runs as a Fargate task on
+  # AWS, proven here first. Profiled so a bare `docker compose up` ignores it.
+  #   docker compose --profile tools run --rm migrate
+  migrate:
+    build:
+      context: ./backend
+      target: migrate
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=logindemo
+      - DB_USER=appuser
+      - DB_PASSWORD=password123
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles: [ "tools" ]
 
 volumes:
   pgdata: { }
