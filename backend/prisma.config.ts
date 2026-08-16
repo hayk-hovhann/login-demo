@@ -3,12 +3,33 @@
 import 'dotenv/config';
 import { defineConfig } from 'prisma/config';
 
+// The app connects with discrete DB_* (a pg.PoolConfig — no escaping needed),
+// but `prisma migrate deploy` has no --url flag in v7 and reads the datasource
+// only from this file. So assemble a URL from the same vars.
+//
+// encodeURIComponent is not decoration: RDS-managed passwords may contain
+// # ? % : & — the first two are illegal in a URL userinfo component and would
+// silently truncate the connection string.
+//
+// Returning undefined is safe: `npx prisma generate` already runs in the Docker
+// build stage with no DATABASE_URL present.
+function datasourceUrl(): string | undefined {
+  if (process.env['DATABASE_URL']) return process.env['DATABASE_URL'];
+
+  const { DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD } = process.env;
+  if (!DB_HOST || !DB_NAME || !DB_USER || !DB_PASSWORD) return undefined;
+
+  const user = encodeURIComponent(DB_USER);
+  const password = encodeURIComponent(DB_PASSWORD);
+  return `postgresql://${user}:${password}@${DB_HOST}:${DB_PORT ?? '5432'}/${DB_NAME}`;
+}
+
 export default defineConfig({
   schema: 'prisma/schema.prisma',
   migrations: {
     path: 'prisma/migrations',
   },
   datasource: {
-    url: process.env['DATABASE_URL'],
+    url: datasourceUrl(),
   },
 });
