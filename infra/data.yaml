@@ -103,6 +103,13 @@ Resources:
       DBSubnetGroupName: !Ref DbSubnetGroup
       VPCSecurityGroups:
         - !GetAtt DbSecurityGroup.GroupId
+      # Lets humans authenticate with a short-lived SigV4 token instead of the
+      # master password: GRANT rds_iam to a DB role, then pass the output of
+      # `aws rds generate-db-auth-token` as the password. The DB role lives in
+      # the data files, so it survives every snapshot restore; only this flag
+      # has to be re-applied. Note DbiResourceId (used in the rds-db:connect
+      # policy ARN) is regenerated on each restore — wildcard it.
+      EnableIAMDatabaseAuthentication: true
       PubliclyAccessible: false           # in-VPC only; reached via the client SG
       MultiAZ: false                      # single-AZ = cheap; fine for a demo
       BackupRetentionPeriod: 1            # minimal automated backups
