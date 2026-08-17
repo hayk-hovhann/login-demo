@@ -22,7 +22,9 @@ export_value() {
   local name="$1" value
   value=$(aws cloudformation list-exports \
             --query "Exports[?Name=='${name}'].Value" --output text)
-  [ -n "$value" ] && [ "$value" != "None" ] || die "export '${name}' not found — is the stack deployed?"
+  if [ -z "$value" ] || [ "$value" = "None" ]; then
+    die "export '${name}' not found — is the stack deployed?"
+  fi
   echo "$value"
 }
 
@@ -30,7 +32,9 @@ stack_output() {
   local name="$1" value
   value=$(aws cloudformation describe-stacks --stack-name "$APP_STACK" \
             --query "Stacks[0].Outputs[?OutputKey=='${name}'].OutputValue" --output text)
-  [ -n "$value" ] && [ "$value" != "None" ] || die "output '${name}' not found on ${APP_STACK}"
+  if [ -z "$value" ] || [ "$value" = "None" ]; then
+    die "output '${name}' not found on ${APP_STACK}"
+  fi
   echo "$value"
 }
 
@@ -58,7 +62,9 @@ TASK_ARN=$(aws ecs run-task \
   --network-configuration "awsvpcConfiguration={subnets=[${SUBNET_A},${SUBNET_B}],securityGroups=[${DB_CLIENT_SG}],assignPublicIp=ENABLED}" \
   --query 'tasks[0].taskArn' --output text)
 
-[ -n "$TASK_ARN" ] && [ "$TASK_ARN" != "None" ] || die "run-task returned no task ARN"
+if [ -z "$TASK_ARN" ] || [ "$TASK_ARN" = "None" ]; then
+  die "run-task returned no task ARN"
+fi
 echo "task: ${TASK_ARN}"
 echo "waiting for it to stop (first run pulls a ~670MB image, allow a minute)..."
 

@@ -28,7 +28,9 @@ export_value() {
   local name="$1" value
   value=$(aws cloudformation list-exports \
             --query "Exports[?Name=='${name}'].Value" --output text)
-  [ -n "$value" ] && [ "$value" != "None" ] || die "export '${name}' not found — is ${DATA_STACK} deployed?"
+  if [ -z "$value" ] || [ "$value" = "None" ]; then
+    die "export '${name}' not found — is ${DATA_STACK} deployed?"
+  fi
   echo "$value"
 }
 
@@ -36,7 +38,9 @@ stack_output() {
   local stack="$1" name="$2" value
   value=$(aws cloudformation describe-stacks --stack-name "$stack" \
             --query "Stacks[0].Outputs[?OutputKey=='${name}'].OutputValue" --output text 2>/dev/null || true)
-  [ -n "$value" ] && [ "$value" != "None" ] || die "output '${name}' not found on ${stack} — is it deployed?"
+  if [ -z "$value" ] || [ "$value" = "None" ]; then
+    die "output '${name}' not found on ${stack} — is it deployed?"
+  fi
   echo "$value"
 }
 

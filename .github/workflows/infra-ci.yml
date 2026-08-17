@@ -41,7 +41,13 @@ jobs:
 
       # shellcheck = the same idea for shell. These scripts interpolate AWS ids
       # into command strings, where an unquoted empty variable yields a malformed
-      # API call rather than an error. Preinstalled on the ubuntu-latest runner.
+      # API call rather than an error.
+      #
+      # Pinned to a container rather than the runner's bundled shellcheck: the
+      # bundled version moves on its own schedule, and checks are added AND
+      # retired between releases (0.11 dropped SC2015, which 0.9 reports), so an
+      # unpinned runner can fail on code that a newer local install calls clean.
+      # Match this tag locally to reproduce CI exactly.
       - name: Lint shell scripts
         run: |
           set -euo pipefail
@@ -49,7 +55,7 @@ jobs:
           FOUND=0
           for f in infra/*.sh; do
             echo "::group::shellcheck $f"
-            shellcheck "$f"
+            docker run --rm -v "$PWD:/mnt" koalaman/shellcheck:v0.11.0 "$f"
             echo "::endgroup::"
             FOUND=1
           done
