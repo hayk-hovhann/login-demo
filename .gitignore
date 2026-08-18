@@ -21,3 +21,5 @@ npm-debug.log*
 # claude code context system (local only)
 CLAUDE.md
 .claude/
+# curl cookie jars from manual auth testing — hold live session cookies
+*jar.txt
