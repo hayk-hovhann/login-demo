@@ -180,9 +180,22 @@ Resources:
         - Fn::ImportValue: !Sub '${NetworkStackName}-SubnetAId'
         - Fn::ImportValue: !Sub '${NetworkStackName}-SubnetBId'
 
-  # SG chaining: only things in ServiceSecurityGroup may reach 6379.
-  # No password — in-VPC access control IS the security boundary here.
-  # Nothing outside the VPC can route to it at all.
+  # Empty membership badge, mirroring DbClientSecurityGroup in data.yaml: holds no
+  # rules itself, and attaching it is what grants reach to 6379 (the rule lives on
+  # RedisSecurityGroup below, evaluated on the receiving side). Exists so the
+  # bastion can tunnel a GUI client to Redis WITHOUT widening the Postgres badge
+  # to a second port — one SG per access intent, so "may reach Redis" never rides
+  # along with "may reach Postgres".
+  RedisClientSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: !Sub '${AWS::StackName}-redis-client (attach to anything that needs Redis)'
+      VpcId:
+        Fn::ImportValue: !Sub '${NetworkStackName}-VpcId'
+
+  # SG chaining: only things in ServiceSecurityGroup or RedisClientSecurityGroup
+  # may reach 6379. No password — in-VPC access control IS the security boundary
+  # here. Nothing outside the VPC can route to it at all.
   RedisSecurityGroup:
     Type: 'AWS::EC2::SecurityGroup'
     Properties:
@@ -191,6 +204,10 @@ Resources:
         Fn::ImportValue: !Sub '${NetworkStackName}-VpcId'
       SecurityGroupIngress:
         - SourceSecurityGroupId: !Ref ServiceSecurityGroup
+          FromPort: 6379
+          ToPort: 6379
+          IpProtocol: tcp
+        - SourceSecurityGroupId: !Ref RedisClientSecurityGroup
           FromPort: 6379
           ToPort: 6379
           IpProtocol: tcp
@@ -706,6 +723,16 @@ Outputs:
   RedisEndpoint:
     Description: 'Redis endpoint the backend connects to'
     Value: !Sub '${RedisReplicationGroup.PrimaryEndPoint.Address}:${RedisReplicationGroup.PrimaryEndPoint.Port}'
+  # The only Export this ephemeral stack publishes, and it points the dependency
+  # arrow the same way as the rest: bastion -> app -> data -> network. While the
+  # bastion imports it, CloudFormation refuses to delete this stack — which is
+  # already the teardown order (bastion first), so the lock only ever fires when
+  # you were about to do it wrong.
+  RedisClientSecurityGroupId:
+    Description: 'Attach this SG to anything that needs to reach Redis on 6379 (the bastion imports + attaches it to tunnel a GUI client).'
+    Value: !Ref RedisClientSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-RedisClientSgId'
   SessionSecretArn:
     Description: 'Secrets Manager ARN holding the express-session signing key'
     Value: !Ref SessionSecret
