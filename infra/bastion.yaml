@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'login-demo bastion — SSM-managed private t3.micro for GUI tunneling to private RDS (5432). No public inbound, no SSH key. Session-scoped: create when you need GUI access, stop or delete when done. Imports the network + the DB client SG.'
+Description: 'login-demo bastion — SSM-managed private t3.micro for GUI tunneling to private RDS (5432) and, when AppStackName is set, ElastiCache Redis (6379). No public inbound, no SSH key. Session-scoped: create when you need GUI access, stop or delete when done. Imports the network + the DB client SG (+ optionally the Redis client SG).'
 
 # ============================================================================
 # WHY THIS EXISTS
@@ -14,7 +14,9 @@ Description: 'login-demo bastion — SSM-managed private t3.micro for GUI tunnel
 #   - No SecurityGroupIngress at all. SSM needs none — the agent dials OUT to
 #     AWS. Nothing can connect TO this box. No SSH, no key pair.
 #   - Carries the DB client SG (imported) so it may reach Postgres on 5432,
-#     exactly like the backend tasks do.
+#     exactly like the backend tasks do. With AppStackName set it also carries the
+#     app stack's Redis client SG for 6379 — a SEPARATE badge on purpose, so GUI
+#     access to one datastore never implies access to the other.
 #
 # COST: t3.micro ~= $7.50/mo IF LEFT RUNNING. Stop it when idle (a stopped
 # instance bills only its ~8GB EBS, pennies), or delete this whole stack.
@@ -29,10 +31,18 @@ Parameters:
     Type: String
     Default: 'login-demo-data'
     Description: 'Data stack to import the DB client SG from (grants Postgres reach).'
+  AppStackName:
+    Type: String
+    Default: ''
+    Description: 'OPTIONAL. Set to the app stack name (login-demo-app) to also import its Redis client SG and gain 6379 reach. Left empty the bastion is Postgres-only, so it still deploys when no app stack exists — Redis lives in the ephemeral app stack, and a hard import would make DB-only sessions impossible.'
   LatestAmiId:
     Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
     Default: '/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64'
     Description: 'Always the current Amazon Linux 2023 AMI — resolved from the public SSM parameter, never hardcoded.'
+
+Conditions:
+  # Opt-in: only wire up Redis reach when an app stack was named.
+  HasAppStack: !Not [!Equals [!Ref AppStackName, '']]
 
 Resources:
 
@@ -83,6 +93,13 @@ Resources:
           GroupSet:
             - !Ref BastionSecurityGroup
             - Fn::ImportValue: !Sub '${DataStackName}-DbClientSgId'   # badge to reach Postgres 5432
+            # AWS::NoValue drops the element entirely when AppStackName is empty,
+            # which is what keeps the import itself conditional — an ImportValue
+            # that merely resolves to "" would still fail the whole stack.
+            - !If
+              - HasAppStack
+              - Fn::ImportValue: !Sub '${AppStackName}-RedisClientSgId'   # badge to reach Redis 6379
+              - !Ref 'AWS::NoValue'
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-bastion'
