@@ -162,6 +162,15 @@ Resources:
   HttpRedirectListener:
     Type: 'AWS::ElasticLoadBalancingV2::Listener'
     Condition: HasCertificate
+    # LOAD-BEARING on the HTTP -> HTTPS update path. Turning TLS on asks
+    # CloudFormation to move AppListener 80 -> 443 and to create this listener on
+    # 80, and it will do them in parallel: this one is created while AppListener
+    # still holds 80, and ELB rejects it with "A listener already exists on this
+    # port" (HandlerErrorCode: AlreadyExists). DependsOn serializes them so the
+    # port is vacated first. Not needed on a from-scratch create with a cert —
+    # AppListener is born on 443 and nothing contends for 80 — which is exactly
+    # why this failure only ever shows up on the upgrade.
+    DependsOn: AppListener
     Properties:
       LoadBalancerArn: !Ref LoadBalancer
       Port: 80
