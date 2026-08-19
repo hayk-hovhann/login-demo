@@ -23,3 +23,6 @@ CLAUDE.md
 .claude/
 # curl cookie jars from manual auth testing — hold live session cookies
 *jar.txt
+# TLS material minted by infra/make-cert.sh — private keys, including the local
+# root CA's. Regenerate with the script; never commit.
+infra/certs/

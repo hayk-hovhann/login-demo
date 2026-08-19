@@ -35,10 +35,19 @@ Parameters:
     AllowedValues: [ 'true', 'false' ]
     Description: 'Allow POST /api/auth/register. Defaults TRUE on purpose: each session starts from a fresh or snapshot-restored DB with no seeding path on ECS, so the frontend Register tab is the only way in — and parameters omitted on update-stack revert to the TEMPLATE DEFAULT, so a forgotten flag stays harmless. Flip to false to demonstrate the gate.'
 
+  CertificateArn:
+    Type: String
+    Default: ''
+    Description: 'ACM certificate ARN for the HTTPS listener. BLANK = HTTP only (the pre-TLS behaviour, unchanged). Set it and the stack grows a 443 listener, redirects 80 -> 443, and flips COOKIE_SECURE to true. Deploy is two-phase by nature: the cert must cover the ALB DNS name, which does not exist until the stack does — bring the stack up blank, then ./infra/make-cert.sh, then update-stack with the ARN it prints. WARNING: update-stack reverts any omitted parameter to the TEMPLATE DEFAULT, so a later update that forgets this one silently tears TLS back down (and with it the secure cookie). Pass CertificateArn,UsePreviousValue=true on every subsequent update-stack, exactly like NotificationEmail. `aws cloudformation deploy` does not have this failure mode — it preserves unspecified parameters.'
+
 Conditions:
   # Only create the email subscription when an address was actually provided.
   # The topic and alarms exist either way; this just controls delivery.
   HasEmail: !Not [!Equals [!Ref NotificationEmail, '']]
+
+  # TLS is opt-in via parameter rather than a separate template, so the HTTP-only
+  # and HTTPS shapes are the SAME stack — no recreate, no second code path to rot.
+  HasCertificate: !Not [!Equals [!Ref CertificateArn, '']]
 
 Resources:
 
@@ -56,11 +65,23 @@ Resources:
       GroupDescription: !Sub '${AWS::StackName}-alb'
       VpcId:
         Fn::ImportValue: !Sub '${NetworkStackName}-VpcId'
-      SecurityGroupIngress:
-        - CidrIp: '0.0.0.0/0'
-          FromPort: 80
-          ToPort: 80
-          IpProtocol: tcp
+      # 80 stays open even with TLS on — it serves the 301 to HTTPS, which is the
+      # whole point of a redirect listener. !If returns the WHOLE list here: a
+      # single ingress entry cannot be conditionally omitted from a list in place.
+      SecurityGroupIngress: !If
+        - HasCertificate
+        - - CidrIp: '0.0.0.0/0'
+            FromPort: 80
+            ToPort: 80
+            IpProtocol: tcp
+          - CidrIp: '0.0.0.0/0'
+            FromPort: 443
+            ToPort: 443
+            IpProtocol: tcp
+        - - CidrIp: '0.0.0.0/0'
+            FromPort: 80
+            ToPort: 80
+            IpProtocol: tcp
 
   # One SG for both services. Allows the ALB to reach frontend:80 and backend:3000.
   # A task only listens on its own port, so sharing the SG is fine.
@@ -97,22 +118,69 @@ Resources:
         - Fn::ImportValue: !Sub '${NetworkStackName}-SubnetAId'
         - Fn::ImportValue: !Sub '${NetworkStackName}-SubnetBId'
 
-  # Default: everything -> frontend. (API split is a higher-priority rule below.)
-  HttpListener:
+  # THE listener that serves the app. It moves ports rather than being duplicated:
+  #   no cert -> 80/HTTP     cert -> 443/HTTPS
+  # One listener means ONE /api/* rule and one DependsOn chain. The alternative —
+  # a permanent HTTP listener plus a conditional HTTPS one — forces the rule to be
+  # declared twice, and then BackendService's `DependsOn` has to name a resource
+  # that may not exist. DependsOn takes no intrinsic functions, so that shape is
+  # not expressible; cfn-lint E3005 catches it.
+  #
+  # Port and Protocol both update in place on an existing listener, so flipping a
+  # live stack from HTTP to HTTPS is an update, not a replacement.
+  #
+  # TLS terminates HERE. ALB -> task traffic stays plain HTTP inside the VPC (both
+  # target groups are Protocol: HTTP), so the containers need no cert and no code
+  # change. That split is exactly why `trust proxy` is load-bearing in the backend:
+  # Express sees an http:// connection and would refuse to set a `secure` cookie
+  # without being told to believe X-Forwarded-Proto.
+  AppListener:
     Type: 'AWS::ElasticLoadBalancingV2::Listener'
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: !If [HasCertificate, 443, 80]
+      Protocol: !If [HasCertificate, HTTPS, HTTP]
+      # TLS 1.2 floor, TLS 1.3 offered. Anything older is long past end-of-life.
+      # AWS::NoValue drops the property entirely — an HTTP listener rejects both
+      # SslPolicy and Certificates, so they cannot be left as empty strings.
+      SslPolicy: !If
+        - HasCertificate
+        - 'ELBSecurityPolicy-TLS13-1-2-2021-06'
+        - !Ref 'AWS::NoValue'
+      Certificates: !If
+        - HasCertificate
+        - - CertificateArn: !Ref CertificateArn
+        - !Ref 'AWS::NoValue'
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref FrontendTargetGroup
+
+  # Only exists alongside TLS: port 80 stops serving the app and 301s to HTTPS.
+  # The redirect is the listener's DEFAULT action and there are no rules above it,
+  # so it covers /api/* too. A 301 makes most clients re-issue a POST as a GET, so
+  # plain-HTTP API calls fail loudly rather than half-working.
+  HttpRedirectListener:
+    Type: 'AWS::ElasticLoadBalancingV2::Listener'
+    Condition: HasCertificate
     Properties:
       LoadBalancerArn: !Ref LoadBalancer
       Port: 80
       Protocol: HTTP
       DefaultActions:
-        - Type: forward
-          TargetGroupArn: !Ref FrontendTargetGroup
+        - Type: redirect
+          RedirectConfig:
+            Protocol: HTTPS
+            Port: '443'
+            Host: '#{host}'
+            Path: '/#{path}'
+            Query: '#{query}'
+            StatusCode: HTTP_301
 
   # /api/* -> backend. Higher priority than the default, so it wins for API paths.
   ApiListenerRule:
     Type: 'AWS::ElasticLoadBalancingV2::ListenerRule'
     Properties:
-      ListenerArn: !Ref HttpListener
+      ListenerArn: !Ref AppListener
       Priority: 10
       Conditions:
         - Field: path-pattern
@@ -428,8 +496,13 @@ Resources:
           Environment:
             - Name: PORT
               Value: '3000'
+            # Derived from the listener shape rather than set by hand, so the
+            # flag can never drift from the actual transport. `secure` cookies
+            # over plain HTTP are simply never sent back by the browser, which
+            # looks exactly like a broken login — so this is not a knob worth
+            # exposing as its own parameter.
             - Name: COOKIE_SECURE
-              Value: 'false'
+              Value: !If [HasCertificate, 'true', 'false']
             - Name: REDIS_URL
               Value: !Sub 'redis://${RedisReplicationGroup.PrimaryEndPoint.Address}:${RedisReplicationGroup.PrimaryEndPoint.Port}'
             - Name: DB_HOST
@@ -552,7 +625,7 @@ Resources:
               awslogs-stream-prefix: frontend
 
   FrontendService:
-    DependsOn: HttpListener
+    DependsOn: AppListener
     Type: 'AWS::ECS::Service'
     Properties:
       # Pinned name -> deterministic ServiceName dimension AND keeps the CD locate
@@ -719,7 +792,16 @@ Resources:
 Outputs:
   URL:
     Description: 'App URL (frontend at /, backend at /api/*)'
-    Value: !Sub 'http://${LoadBalancer.DNSName}'
+    Value: !If
+      - HasCertificate
+      - !Sub 'https://${LoadBalancer.DNSName}'
+      - !Sub 'http://${LoadBalancer.DNSName}'
+
+  # Named separately from URL because make-cert.sh needs the bare hostname as the
+  # certificate's SAN, and stripping a scheme off URL in bash is a papercut.
+  LoadBalancerDnsName:
+    Description: 'ALB DNS name, with no scheme. This is the name the TLS certificate must cover.'
+    Value: !GetAtt LoadBalancer.DNSName
   RedisEndpoint:
     Description: 'Redis endpoint the backend connects to'
     Value: !Sub '${RedisReplicationGroup.PrimaryEndPoint.Address}:${RedisReplicationGroup.PrimaryEndPoint.Port}'

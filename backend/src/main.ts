@@ -1,4 +1,5 @@
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import session from 'express-session';
 import { createClient } from 'redis';
 import RedisStore from 'connect-redis';
@@ -8,8 +9,18 @@ import { ValidationPipe } from '@nestjs/common';
 import passport from 'passport';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
   const config = app.get(ConfigService);
+
+  // LOAD-BEARING once TLS terminates at the ALB. The ALB speaks HTTPS to the
+  // browser but plain HTTP to the task, so Express sees an insecure connection
+  // and express-session will silently DECLINE to send a `secure` cookie — login
+  // returns 201 with no Set-Cookie and /me is 403 forever, which reads like a
+  // Passport bug. `1` = trust exactly one proxy hop (the ALB), so X-Forwarded-Proto
+  // is believed but a client-supplied one cannot be spoofed through it.
+  // Inert locally: compose's nginx forwards Host/X-Real-IP/Cookie and no
+  // X-Forwarded-Proto, so req.protocol stays http and COOKIE_SECURE stays false.
+  app.set('trust proxy', 1);
 
   // All routes are served under /api (so the ALB / nginx can route /api/* here)
   app.setGlobalPrefix('api');
