@@ -171,25 +171,31 @@ arn:                 ${CERT_ARN}
 
 attach it (the stack flips to 443 + a 301 from 80, and COOKIE_SECURE to true):
 
-  aws cloudformation update-stack --stack-name ${STACK} \\
-    --template-body file://infra/app-ecs.yaml \\
+  aws cloudformation deploy --stack-name ${STACK} \\
+    --template-file infra/app-ecs.yaml \\
     --capabilities CAPABILITY_IAM \\
     --disable-rollback \\
-    --parameters ParameterKey=CertificateArn,ParameterValue=${CERT_ARN} \\
-                 ParameterKey=NotificationEmail,UsePreviousValue=true \\
-                 ParameterKey=BackendImageTag,UsePreviousValue=true \\
-                 ParameterKey=FrontendImageTag,UsePreviousValue=true
+    --parameter-overrides CertificateArn=${CERT_ARN}
 
-UsePreviousValue on the image tags reuses what the STACK recorded, which is not
-necessarily what is running: CD deploys by mutating the ECS service, behind
-CloudFormation's back. If CD has shipped since this stack was created, pass the
-real tags instead — this update re-registers the backend task definition
-(COOKIE_SECURE changes), so a stale tag here rolls the service backwards.
+\`deploy\`, not \`update-stack\`: it reuses the previous value of every parameter you
+do not name, so this cannot silently reset NotificationEmail (deleting the SNS
+subscription) or the image tags. update-stack reverts omissions to the TEMPLATE
+DEFAULT and would need four explicit UsePreviousValue entries to be equivalent.
 
-then verify the chain for real (no -k):
+Image tags are worth a thought either way. Whatever this update reuses is what
+the STACK recorded, which is not necessarily what is RUNNING — CD deploys by
+mutating the ECS service behind CloudFormation's back. This update re-registers
+the backend task definition (COOKIE_SECURE changes), so a stale recorded tag
+rolls the service backwards. If CD has shipped since the stack was created, add
+BackendImageTag=<sha> FrontendImageTag=<sha> to the overrides.
+
+then verify the chain for real (no -k) — want 200:
 
   curl -sSI --cacert ${CERT_DIR}/ca.pem https://${DNS_NAME}/ | head -1
-  curl -sSI http://${DNS_NAME}/ | head -2        # want 301 -> https
+
+and that port 80 now redirects — want 301 and a Location on https:
+
+  curl -sSI http://${DNS_NAME}/ | head -3
 
 DO NOT FORGET AT TEARDOWN:  ./infra/make-cert.sh delete
 EOF
