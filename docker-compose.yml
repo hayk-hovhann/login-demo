@@ -70,7 +70,8 @@ services:
   frontend:
     build: ./frontend
     ports:
-      - "8080:80"                      # http://localhost:8080
+      # container side is 8080 now — nginx runs unprivileged and cannot bind :80
+      - "8080:8080"                    # http://localhost:8080
     depends_on:
       - backend
 
