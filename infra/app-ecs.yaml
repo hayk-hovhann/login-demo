@@ -83,7 +83,7 @@ Resources:
             ToPort: 80
             IpProtocol: tcp
 
-  # One SG for both services. Allows the ALB to reach frontend:80 and backend:3000.
+  # One SG for both services. Allows the ALB to reach frontend:8080 and backend:3000.
   # A task only listens on its own port, so sharing the SG is fine.
   # NOTE: because it's shared, the RedisSecurityGroup rule below also admits the
   # frontend task to 6379. Harmless (nginx has no Redis client) but broader than
@@ -96,8 +96,8 @@ Resources:
         Fn::ImportValue: !Sub '${NetworkStackName}-VpcId'
       SecurityGroupIngress:
         - SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
-          FromPort: 80
-          ToPort: 80
+          FromPort: 8080
+          ToPort: 8080
           IpProtocol: tcp
         - SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
           FromPort: 3000
@@ -204,7 +204,9 @@ Resources:
     Properties:
       VpcId:
         Fn::ImportValue: !Sub '${NetworkStackName}-VpcId'
-      Port: 80
+      # 8080 = the unprivileged nginx port inside the task. The ALB still
+      # LISTENS on 80/443 — only the target port moved.
+      Port: 8080
       Protocol: HTTP
       TargetType: ip                       # Fargate = register by task ENI IP
       HealthCheckPath: '/'                 # nginx serves index.html -> 200
@@ -624,7 +626,7 @@ Resources:
           Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/login-demo-frontend:${FrontendImageTag}'
           Essential: true
           PortMappings:
-            - ContainerPort: 80
+            - ContainerPort: 8080
               Protocol: tcp
           LogConfiguration:
             LogDriver: awslogs
@@ -654,7 +656,7 @@ Resources:
           Rollback: true
       LoadBalancers:
         - ContainerName: frontend
-          ContainerPort: 80
+          ContainerPort: 8080
           TargetGroupArn: !Ref FrontendTargetGroup
       NetworkConfiguration:
         AwsvpcConfiguration:
