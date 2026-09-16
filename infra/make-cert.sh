@@ -1,25 +1,33 @@
 #!/usr/bin/env bash
-# Mint a TLS certificate for the ALB and import it into ACM, so the app stack can
-# grow an HTTPS listener without owning a domain.
+# FALLBACK ONLY. Mint a TLS certificate for the ALB's raw DNS name, signed by a
+# local root CA, and import it into ACM.
 #
 #   ./infra/make-cert.sh            # mint + import, print the ARN and next command
 #   ./infra/make-cert.sh delete     # delete the imported cert (TEARDOWN — do this)
 #   ./infra/make-cert.sh show       # what is imported right now, and what uses it
 #
-# WHY A PRIVATE CA AND NOT ONE BARE SELF-SIGNED CERT
-# A public ACM certificate is issued only after you prove control of a domain, and
-# the ALB's *.elb.amazonaws.com name is Amazon's, not yours — so no public CA will
-# ever sign for it. The honest substitute is to be your own CA: a root that signs a
-# leaf for the ALB's DNS name. The chain is then real and verifiable
-# (`curl --cacert`), and a browser warns for exactly one reason — it has never
-# heard of this root — rather than because the certificate is structurally junk.
-# Swapping in a public cert later is a CertificateArn change and nothing else.
+# THE NORMAL PATH DOES NOT USE THIS SCRIPT
+# HTTPS normally comes from the ACM-issued *.hayk-lab.dedyn.io certificate: a
+# public CA signed it, so browsers trust it with no warning. It exists before the
+# stack does, so pass its ARN as CertificateArn at CREATE, then point a CNAME for
+# app.hayk-lab.dedyn.io at the ALB. One phase, no minting.
 #
-# The certificate must cover the ALB's DNS name, which does not exist until the
-# stack does. Hence the two-phase deploy:
-#   1. deploy login-demo-app with CertificateArn=''   (HTTP only, today's shape)
+# Reach for this script only when that path is unavailable — the domain lapsed,
+# deSEC is down, the cert expired or failed renewal. No public CA will sign the
+# ALB's *.elb.amazonaws.com name (it is Amazon's, not yours), so the substitute is
+# to be your own CA: a root that signs a leaf for that name. The chain is real and
+# verifiable (`curl --cacert`); a browser warns for exactly one reason — it has
+# never heard of this root.
+#
+# This path IS two-phase, because the leaf must name the ALB's DNS name, which
+# does not exist until the stack does:
+#   1. deploy login-demo-app with CertificateArn=''   (HTTP only)
 #   2. ./infra/make-cert.sh
-#   3. update-stack with the ARN it prints            (443 + 301 + secure cookies)
+#   3. deploy again with the ARN it prints            (443 + 301 + secure cookies)
+#
+# SCOPE: every mode acts only on IMPORTED certificates. The ACM-issued domain cert
+# carries the same Project tag, and a tag-only match would re-import over it or
+# delete it at teardown.
 #
 # STACK overrides the app stack name; CERT_DIR the local key/cert location.
 set -euo pipefail
@@ -29,8 +37,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CERT_DIR="${CERT_DIR:-${REPO_ROOT}/infra/certs}"
 
 # Tag used to find the certificate again at teardown. An imported ACM cert costs
-# nothing, which is precisely why it is easy to abandon — and aws-sweep.sh does
-# not look at ACM, so nothing else will ever remind you it is there.
+# nothing, which is precisely why it is easy to abandon. aws-sweep.sh lists ACM
+# certs in every region, but only this script's `delete` removes one.
 TAG_KEY='Project'
 TAG_VALUE='login-demo'
 
@@ -46,14 +54,23 @@ stack_output() {
   echo "$value"
 }
 
-# One call instead of list-certificates + list-tags-for-certificate per ARN.
+# Tagged for this project AND of type IMPORTED. The tag alone is not enough: the
+# ACM-issued *.hayk-lab.dedyn.io cert shares it, and must never be re-imported
+# over or deleted. Type is what ACM itself reports, so no tagging slip defeats it.
 # Prints zero or more ARNs, one per line.
 find_certs() {
+  local imported
+  imported=$(aws acm list-certificates \
+               --query "CertificateSummaryList[?Type=='IMPORTED'].CertificateArn" \
+               --output text 2>/dev/null | tr '\t' '\n' | sed '/^$/d')
+  [ -n "$imported" ] || return 0
+
   aws resourcegroupstaggingapi get-resources \
     --resource-type-filters acm:certificate \
     --tag-filters "Key=${TAG_KEY},Values=${TAG_VALUE}" \
     --query 'ResourceTagMappingList[].ResourceARN' --output text 2>/dev/null \
-    | tr '\t' '\n' | sed '/^$/d'
+    | tr '\t' '\n' | sed '/^$/d' \
+    | grep -Fx -f <(printf '%s\n' "$imported") || true
 }
 
 case "${1:-mint}" in
@@ -100,7 +117,7 @@ DNS_NAME=$(stack_output "$STACK" LoadBalancerDnsName)
 mkdir -p "$CERT_DIR"
 # Private keys land here. .gitignore covers infra/certs/, but keep the directory
 # unreadable to anyone else on the machine regardless.
-chmod 700 "$CERT_DIR"
+chmod u=rwx,go= "$CERT_DIR"
 
 # --- root CA -----------------------------------------------------------------
 # Reused across mints if it already exists, so a browser exception you granted
@@ -136,7 +153,7 @@ openssl x509 -req -in "${CERT_DIR}/server.csr" \
   -out "${CERT_DIR}/server.pem" -days 397 -sha256 \
   -extfile "${CERT_DIR}/leaf.ext" 2>/dev/null
 
-chmod 600 "${CERT_DIR}"/*.key
+chmod u=rw,go= "${CERT_DIR}"/*.key
 
 # --- import into ACM ----------------------------------------------------------
 # Re-import into an EXISTING ARN when one is already tagged for this project.
@@ -174,13 +191,15 @@ attach it (the stack flips to 443 + a 301 from 80, and COOKIE_SECURE to true):
   aws cloudformation deploy --stack-name ${STACK} \\
     --template-file infra/app-ecs.yaml \\
     --capabilities CAPABILITY_IAM \\
-    --disable-rollback \\
     --parameter-overrides CertificateArn=${CERT_ARN}
 
 \`deploy\`, not \`update-stack\`: it reuses the previous value of every parameter you
 do not name, so this cannot silently reset NotificationEmail (deleting the SNS
 subscription) or the image tags. update-stack reverts omissions to the TEMPLATE
 DEFAULT and would need four explicit UsePreviousValue entries to be equivalent.
+
+No --disable-rollback: this update replaces the backend task definition, and
+CloudFormation refuses replacements on a stack with rollback disabled.
 
 Image tags are worth a thought either way. Whatever this update reuses is what
 the STACK recorded, which is not necessarily what is RUNNING — CD deploys by
