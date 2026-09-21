@@ -1,4 +1,8 @@
-import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import {
+  Injectable,
+  OnApplicationShutdown,
+  OnModuleInit,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaClient } from '../generated/prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
@@ -23,7 +27,7 @@ function buildAdapter(config: ConfigService): PrismaPg {
 @Injectable()
 export class PrismaService
   extends PrismaClient
-  implements OnModuleInit, OnModuleDestroy
+  implements OnModuleInit, OnApplicationShutdown
 {
   constructor(config: ConfigService) {
     super({ adapter: buildAdapter(config) });
@@ -31,7 +35,11 @@ export class PrismaService
   async onModuleInit() {
     await this.$connect();
   }
-  async onModuleDestroy() {
+  // Shutdown, NOT onModuleDestroy: Nest runs destroy hooks BEFORE it closes the
+  // HTTP server, so disconnecting there pulls the pool out from under requests
+  // still in flight. Shutdown hooks run after the server has drained them.
+  async onApplicationShutdown() {
     await this.$disconnect();
+    console.log('Postgres pool closed');
   }
 }
