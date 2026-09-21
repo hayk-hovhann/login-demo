@@ -1,4 +1,4 @@
-import { Global, Module } from '@nestjs/common';
+import { Global, Inject, Module, OnApplicationShutdown } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createClient, type RedisClientType } from 'redis';
 
@@ -38,4 +38,15 @@ export type RedisClient = RedisClientType;
   ],
   exports: [REDIS_CLIENT],
 })
-export class RedisModule {}
+export class RedisModule implements OnApplicationShutdown {
+  // The factory above returns a plain object, which cannot carry lifecycle
+  // hooks — so the module class owns the client's shutdown instead.
+  constructor(@Inject(REDIS_CLIENT) private readonly client: RedisClient) {}
+
+  // After the HTTP server has drained, for the same reason as PrismaService.
+  // close() lets queued commands finish; destroy() would drop them.
+  async onApplicationShutdown() {
+    await this.client.close();
+    console.log('Redis connection closed');
+  }
+}
