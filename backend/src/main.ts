@@ -1,9 +1,9 @@
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import session from 'express-session';
-import { createClient } from 'redis';
 import RedisStore from 'connect-redis';
 import { AppModule } from './app.module';
+import { REDIS_CLIENT, type RedisClient } from './redis/redis.module';
 import { ConfigService } from '@nestjs/config';
 import { ValidationPipe } from '@nestjs/common';
 import passport from 'passport';
@@ -32,21 +32,8 @@ async function bootstrap() {
     }),
   );
 
-  const redisClient = createClient({
-    url: config.getOrThrow<string>('REDIS_URL'),
-    socket: {
-      connectTimeout: 5000,
-      // Return an Error to STOP reconnecting -> connect() rejects instead of
-      // hanging. Without this, the default strategy retries forever and the
-      // await never settles.
-      reconnectStrategy: (retries) =>
-        retries > 5
-          ? new Error('Redis unreachable')
-          : Math.min(retries * 200, 2000),
-    },
-  });
-  redisClient.on('error', (err) => console.error('Redis error:', err));
-  await redisClient.connect();
+  // Built and connected by RedisModule; the same client backs /api/ready.
+  const redisClient = app.get<RedisClient>(REDIS_CLIENT);
 
   app.use(
     session({
