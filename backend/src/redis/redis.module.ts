@@ -17,21 +17,27 @@ export type RedisClient = RedisClientType;
       // so an unreachable Redis still fails startup (NestFactory.create rejects
       // -> bootstrap().catch -> exit 1), exactly as before the move.
       useFactory: async (config: ConfigService): Promise<RedisClient> => {
+        // Two phases need opposite retry policies, and this flag splits them.
+        let connectedOnce = false;
         const client = createClient({
           url: config.getOrThrow<string>('REDIS_URL'),
           socket: {
             connectTimeout: 5000,
-            // Return an Error to STOP reconnecting -> connect() rejects instead of
-            // hanging. Without this, the default strategy retries forever and the
-            // await never settles.
+            // Startup: return an Error to STOP reconnecting -> connect() rejects
+            // instead of hanging. Without this, the default strategy retries
+            // forever and the await never settles.
+            // Runtime: never give up. A client that stops retrying stays dead
+            // after Redis comes back — /ready reads down and every login fails
+            // until the task is replaced. Keep retrying, capped at 2s apart.
             reconnectStrategy: (retries) =>
-              retries > 5
+              !connectedOnce && retries > 5
                 ? new Error('Redis unreachable')
                 : Math.min(retries * 200, 2000),
           },
         });
         client.on('error', (err) => console.error('Redis error:', err));
         await client.connect();
+        connectedOnce = true;
         return client;
       },
     },
