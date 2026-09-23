@@ -21,7 +21,33 @@ function datasourceUrl(): string | undefined {
 
   const user = encodeURIComponent(DB_USER);
   const password = encodeURIComponent(DB_PASSWORD);
-  return `postgresql://${user}:${password}@${DB_HOST}:${DB_PORT ?? '5432'}/${DB_NAME}`;
+  return `postgresql://${user}:${password}@${DB_HOST}:${DB_PORT ?? '5432'}/${DB_NAME}${sslParams()}`;
+}
+
+// The schema engine behind `migrate deploy` is a Rust binary, not Node: it
+// ignores NODE_EXTRA_CA_CERTS and PGSSLMODE alike and takes TLS settings only
+// from URL parameters, in Prisma's own dialect. Its defaults are
+// sslmode=prefer + sslaccept=accept_invalid_certs — encrypted, nothing
+// verified. The migrate task sets the standard libpq names; this translates.
+//
+// Unset PGSSLMODE (compose, `prisma migrate dev` from the host) leaves the URL
+// bare, because local Postgres has no TLS. A missing root cert throws rather
+// than quietly falling back to an unverified connection.
+function sslParams(): string {
+  if (process.env['PGSSLMODE'] !== 'verify-full') return '';
+
+  const rootCert = process.env['PGSSLROOTCERT'];
+  if (!rootCert)
+    throw new Error('PGSSLMODE=verify-full requires PGSSLROOTCERT');
+
+  // Despite the name, sslcert is the CA file that verifies the server — not a
+  // client certificate (that is sslidentity). Pass an absolute path.
+  const params = new URLSearchParams({
+    sslmode: 'require',
+    sslaccept: 'strict',
+    sslcert: rootCert,
+  });
+  return `?${params.toString()}`;
 }
 
 export default defineConfig({

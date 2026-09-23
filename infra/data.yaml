@@ -103,6 +103,14 @@ Resources:
       DBSubnetGroupName: !Ref DbSubnetGroup
       VPCSecurityGroups:
         - !GetAtt DbSecurityGroup.GroupId
+      # Which RDS CA signs this instance's server cert. rds-ca-rsa2048-g1 is
+      # already the default for new launches (describe-certificates, no account
+      # override) — pinning makes the template say so instead of inheriting
+      # whatever the default becomes. It must be a root that is in
+      # backend/certs/rds-us-east-1-bundle.pem, and specifically the FIRST one:
+      # whether Prisma's schema engine reads past the first cert in a bundle is
+      # unverified, and RSA2048 is first in the file.
+      CACertificateIdentifier: rds-ca-rsa2048-g1
       # Lets humans authenticate with a short-lived SigV4 token instead of the
       # master password: GRANT rds_iam to a DB role, then pass the output of
       # `aws rds generate-db-auth-token` as the password. The DB role lives in
