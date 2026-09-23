@@ -465,6 +465,15 @@ Resources:
             - Name: DB_NAME
               Value:
                 Fn::ImportValue: !Sub '${DataStackName}-DbName'
+            # Read by prisma.config.ts, not by any driver: the schema engine
+            # takes TLS settings only as URL parameters, so the config
+            # translates these into sslmode/sslaccept/sslcert. Not the
+            # backend's NODE_EXTRA_CA_CERTS — the engine is not Node and never
+            # consults Node's root store. Same bundle file, different reader.
+            - Name: PGSSLMODE
+              Value: 'verify-full'
+            - Name: PGSSLROOTCERT
+              Value: '/app/certs/rds-us-east-1-bundle.pem'
           Secrets:
             - Name: DB_USER
               ValueFrom:
@@ -534,16 +543,25 @@ Resources:
             #
             # node-postgres reads PGSSLMODE from the environment whenever the
             # config object omits `ssl`, so this fixes it without touching code.
-            # `no-verify` (not `require`) because the RDS CA is not in Node's
-            # trust store — plain `require` fails with "self-signed certificate
-            # in certificate chain". Traffic is encrypted; the server cert is not
-            # verified. Bundling the RDS CA and moving to verify-full is the
-            # proper follow-up.
+            # verify-full makes it pass `ssl: true` — Node's default TLS check:
+            # the chain must end at a root in Node's store AND the cert must name
+            # DB_HOST. Spelled verify-full, not `require`: pg 8 treats the two
+            # the same, but pg 9 moves `require` to libpq semantics, which
+            # encrypt without verifying anything.
+            #
+            # Node's bundled roots do not include the RDS CA, so
+            # NODE_EXTRA_CA_CERTS adds the bundle the Dockerfile copies in from
+            # backend/certs/. Node reads it once at startup, and a bad path only
+            # WARNS ("Ignoring extra certs" in the task log) — the task still
+            # goes healthy, then every query fails with "self-signed certificate
+            # in certificate chain".
             #
             # Deliberately set HERE and not in docker-compose: local Postgres
             # has no TLS, so this must stay environment-scoped.
             - Name: PGSSLMODE
-              Value: 'no-verify'
+              Value: 'verify-full'
+            - Name: NODE_EXTRA_CA_CERTS
+              Value: '/app/certs/rds-us-east-1-bundle.pem'
             - Name: REGISTRATION_ENABLED
               Value: !Ref RegistrationEnabled
           # Secrets = resolved at task start by the EXECUTION role and injected as
