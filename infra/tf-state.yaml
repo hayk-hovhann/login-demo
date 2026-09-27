@@ -1,0 +1,62 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'login-demo Terraform state bucket — holds terraform.tfstate for the Terraform-managed stacks. DURABLE + ~$0 idle. Deploy once; do not tear down per session.'
+
+# ============================================================================
+# WHY THIS IS CLOUDFORMATION, NOT TERRAFORM
+# ----------------------------------------------------------------------------
+# Terraform keeps its state in this bucket, so the bucket has to exist before
+# Terraform can run — Terraform can't create the place it records what it
+# created. CloudFormation keeps its record inside AWS (the stack), so it has
+# no such chicken-and-egg problem, and it already owns the other permanent
+# layers (ci-ecr, network).
+#
+# COST: effectively $0. A state file is a few KB; versioning keeps old copies
+# and the lifecycle rule expires them after 30 days.
+#
+# LOCKING needs no extra resource: the S3 backend's `use_lockfile = true`
+# writes a .tflock object next to the state. (The older DynamoDB lock table
+# is deprecated in Terraform's S3 backend docs.)
+# ============================================================================
+
+Resources:
+
+  StateBucket:
+    Type: 'AWS::S3::Bucket'
+    # The state is the only map from Terraform code to real resources — lose it
+    # and everything Terraform built is orphaned. Deleting this stack must never
+    # take the bucket with it.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      # Bucket names are global across every AWS account; the account id makes it unique.
+      BucketName: !Sub 'login-demo-tfstate-${AWS::AccountId}'
+      # Every write keeps the previous version, so a corrupted or overwritten
+      # state can be rolled back.
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-state-versions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+      # State holds secrets in plaintext — never public.
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      # Already the S3 default since 2023; stated so the template says it.
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      Tags:
+        - Key: Project
+          Value: login-demo
+
+Outputs:
+
+  StateBucketName:
+    Description: 'Bucket for the Terraform S3 backend'
+    Value: !Ref StateBucket
