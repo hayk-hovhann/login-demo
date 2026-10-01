@@ -25,6 +25,13 @@ CLAUDE.md
 # Glob both sides: the earlier `*jar.txt` missed suffixed names like
 # awsjar-tls.txt, which is how a live connect.sid became untracked-but-visible.
 *jar*.txt
+# Terraform: provider downloads (the node_modules of Terraform) and any local
+# copy of state, which holds secrets in plaintext. .terraform.lock.hcl is NOT
+# ignored — it's the package-lock.json, and gets committed.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
 # TLS material minted by infra/make-cert.sh — private keys, including the local
 # root CA's. Regenerate with the script; never commit.
 infra/certs/
