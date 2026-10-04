@@ -1,8 +1,8 @@
 # The ALB's security group: LoadBalancerSecurityGroup in app-ecs.yaml.
 
 resource "aws_security_group" "alb" {
-  name        = "login-demo-app-alb"
-  description = "login-demo-app-alb"
+  name        = "${var.app_name}-alb"
+  description = "${var.app_name}-alb"
   vpc_id      = data.aws_cloudformation_export.vpc_id.value
 }
 
@@ -35,6 +35,39 @@ resource "aws_vpc_security_group_ingress_rule" "alb_https" {
 # connections to the tasks.
 resource "aws_vpc_security_group_egress_rule" "alb_all" {
   security_group_id = aws_security_group.alb.id
+  cidr_ipv4         = "0.0.0.0/0"
+  ip_protocol       = "-1"
+}
+
+# The tasks' security group: ServiceSecurityGroup in app-ecs.yaml. Shared by
+# frontend and backend; each task listens only on its own port.
+resource "aws_security_group" "service" {
+  name        = "${var.app_name}-service"
+  description = "${var.app_name}-service"
+  vpc_id      = data.aws_cloudformation_export.vpc_id.value
+}
+
+# 8080, not 80: the frontend image is nginx-unprivileged (non-root).
+resource "aws_vpc_security_group_ingress_rule" "service_frontend" {
+  security_group_id            = aws_security_group.service.id
+  referenced_security_group_id = aws_security_group.alb.id
+  from_port                    = 8080
+  to_port                      = 8080
+  ip_protocol                  = "tcp"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "service_backend" {
+  security_group_id            = aws_security_group.service.id
+  referenced_security_group_id = aws_security_group.alb.id
+  from_port                    = 3000
+  to_port                      = 3000
+  ip_protocol                  = "tcp"
+}
+
+# Same strip as alb_all. Without it the tasks cannot pull their images, fetch
+# the DB secret, ship logs, or reach RDS and Redis.
+resource "aws_vpc_security_group_egress_rule" "service_all" {
+  security_group_id = aws_security_group.service.id
   cidr_ipv4         = "0.0.0.0/0"
   ip_protocol       = "-1"
 }
