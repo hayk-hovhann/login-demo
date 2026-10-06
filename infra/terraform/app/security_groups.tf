@@ -71,3 +71,42 @@ resource "aws_vpc_security_group_egress_rule" "service_all" {
   cidr_ipv4         = "0.0.0.0/0"
   ip_protocol       = "-1"
 }
+
+# The badge: RedisClientSecurityGroup in app-ecs.yaml. No rules at all.
+# Wearing it is what redis_from_client admits on 6379. No egress either: a
+# network interface gets the union of all its groups' rules, so the wearer's
+# main group supplies outbound. CloudFormation kept AWS's allow-all here;
+# dropped on purpose.
+resource "aws_security_group" "redis_client" {
+  name        = "${var.app_name}-redis-client"
+  description = "${var.app_name}-redis-client (attach to anything that needs Redis)"
+  vpc_id      = data.aws_cloudformation_export.vpc_id.value
+}
+
+# Redis's own group: RedisSecurityGroup in app-ecs.yaml. No password on
+# Redis, so these two rules are the whole access boundary.
+resource "aws_security_group" "redis" {
+  name        = "${var.app_name}-redis"
+  description = "${var.app_name}-redis"
+  vpc_id      = data.aws_cloudformation_export.vpc_id.value
+}
+
+resource "aws_vpc_security_group_ingress_rule" "redis_from_service" {
+  security_group_id            = aws_security_group.redis.id
+  referenced_security_group_id = aws_security_group.service.id
+  from_port                    = 6379
+  to_port                      = 6379
+  ip_protocol                  = "tcp"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "redis_from_client" {
+  security_group_id            = aws_security_group.redis.id
+  referenced_security_group_id = aws_security_group.redis_client.id
+  from_port                    = 6379
+  to_port                      = 6379
+  ip_protocol                  = "tcp"
+}
+
+# No egress rule: Redis never opens a connection, it only replies, and
+# statefulness lets replies out. CloudFormation kept AWS's allow-all here;
+# dropped on purpose.
