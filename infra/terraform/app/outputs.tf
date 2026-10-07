@@ -19,3 +19,9 @@ output "redis_client_security_group_id" {
   description = "Attach to anything that needs Redis on 6379 (the bastion, for GUI tunneling)."
   value       = aws_security_group.redis_client.id
 }
+
+# RedisEndpoint in app-ecs.yaml. The backend's REDIS_URL is redis://<this>.
+output "redis_endpoint" {
+  description = "host:port of the Redis primary."
+  value       = "${aws_elasticache_replication_group.redis.primary_endpoint_address}:${aws_elasticache_replication_group.redis.port}"
+}
