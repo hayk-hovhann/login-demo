@@ -25,3 +25,11 @@ output "redis_endpoint" {
   description = "host:port of the Redis primary."
   value       = "${aws_elasticache_replication_group.redis.primary_endpoint_address}:${aws_elasticache_replication_group.redis.port}"
 }
+
+# SessionSecretArn in app-ecs.yaml. The backend task definition hands ECS this
+# ARN to inject as SESSION_SECRET, and the execution role must be allowed to
+# read it.
+output "session_secret_arn" {
+  description = "Secrets Manager ARN holding the express-session signing key."
+  value       = aws_secretsmanager_secret.session.arn
+}
