@@ -15,7 +15,7 @@ resource "aws_elasticache_subnet_group" "redis" {
 # app-ecs.yaml. A replication group, not aws_elasticache_cluster, because the
 # single-cluster endpoint rendered empty on engine 7.1 under CloudFormation.
 # One primary, zero replicas. ~$0.016/hr, and the slowest thing here: measured
-# 4m20s-5m31s to create, 7m53s to destroy.
+# 4m20s-5m31s to create, 6m32s-7m53s to destroy.
 #
 # No final_snapshot_identifier, so destroy deletes it outright: the
 # DeletionPolicy: Delete of the CloudFormation version. Sessions are disposable.
