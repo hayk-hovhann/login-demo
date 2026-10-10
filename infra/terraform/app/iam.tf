@@ -43,3 +43,45 @@ resource "aws_iam_role_policy" "task_execution_read_secrets" {
     }]
   })
 }
+
+# The task role: TaskRole in app-ecs.yaml. What code inside a RUNNING task uses
+# for its own AWS calls. The app makes none; the only user is ECS Exec, whose
+# agent in the container opens its SSM channel with it. Only the backend's task
+# definition names this role.
+#
+# Same trust policy as the execution role. Which role does which job is decided
+# by the task definition: execution_role_arn to start, task_role_arn to run.
+resource "aws_iam_role" "task" {
+  name = "${var.app_name}-task"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "ecs-tasks.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+# ECS Exec's channel. Resource is "*" because ssmmessages cannot be scoped:
+# AWS's authorization reference lists no resource types for it. Granted whether
+# exec is on or off; the switch is the backend service's enable_execute_command
+# (EnableExec in app-ecs.yaml, default off).
+resource "aws_iam_role_policy" "task_ecs_exec" {
+  name = "ecs-exec-ssm"
+  role = aws_iam_role.task.name
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "ssmmessages:CreateControlChannel",
+        "ssmmessages:CreateDataChannel",
+        "ssmmessages:OpenControlChannel",
+        "ssmmessages:OpenDataChannel",
+      ]
+      Resource = "*"
+    }]
+  })
+}
