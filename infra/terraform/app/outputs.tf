@@ -33,3 +33,10 @@ output "session_secret_arn" {
   description = "Secrets Manager ARN holding the express-session signing key."
   value       = aws_secretsmanager_secret.session.arn
 }
+
+# MigrateLogGroupName in app-ecs.yaml. run-migration.sh:44 reads it to tail the
+# migration's logs; at cutover it switches to terraform output -raw.
+output "migrate_log_group_name" {
+  description = "CloudWatch log group the one-shot migration task writes to."
+  value       = aws_cloudwatch_log_group.ecs["migrate"].name
+}
