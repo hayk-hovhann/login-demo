@@ -10,6 +10,12 @@ variable "app_name" {
   default     = "login-demo-app"
 }
 
+variable "frontend_image_tag" {
+  description = "Tag in the login-demo-frontend ECR repo to run: latest, or a frontend commit SHA."
+  type        = string
+  default     = "latest"
+}
+
 variable "certificate_arn" {
   description = "ACM certificate ARN for the HTTPS listener. Null = HTTP only; set it and the ALB also admits 443."
   type        = string
