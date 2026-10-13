@@ -34,6 +34,15 @@ output "session_secret_arn" {
   value       = aws_secretsmanager_secret.session.arn
 }
 
+# LoadBalancerDnsName in app-ecs.yaml: the bare hostname, no scheme. The
+# per-session app CNAME points at it, and make-cert.sh:115 reads it as the
+# name its certificate must cover; at cutover that switches to
+# terraform output -raw.
+output "alb_dns_name" {
+  description = "ALB DNS name, with no scheme. The app CNAME's target."
+  value       = aws_lb.main.dns_name
+}
+
 # MigrateLogGroupName in app-ecs.yaml. run-migration.sh:44 reads it to tail the
 # migration's logs; at cutover it switches to terraform output -raw.
 output "migrate_log_group_name" {
