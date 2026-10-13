@@ -1,3 +1,25 @@
+# The load balancer: LoadBalancer in app-ecs.yaml. AWS runs its nodes in both
+# subnets, each one an ENI wearing the alb group, and one DNS name fronts them
+# all. Use the name, never the IPs: they change as AWS replaces nodes. Bills
+# from creation, ~$0.0225/hr, with or without traffic, and accepts nothing
+# until a listener exists.
+resource "aws_lb" "main" {
+  name               = var.app_name
+  load_balancer_type = "application"
+
+  # Internet-facing: public IPs on the nodes, a DNS name that resolves publicly.
+  internal        = false
+  ip_address_type = "ipv4"
+
+  security_groups = [aws_security_group.alb.id]
+
+  # An ALB needs at least two availability zones: one subnet in each.
+  subnets = [
+    data.aws_cloudformation_export.subnet_a_id.value,
+    data.aws_cloudformation_export.subnet_b_id.value,
+  ]
+}
+
 # Target groups: FrontendTargetGroup and BackendTargetGroup in app-ecs.yaml.
 # Where the ALB sends a request once a rule has picked a service, and how it
 # health-checks each destination. Created empty: each ECS service registers its
