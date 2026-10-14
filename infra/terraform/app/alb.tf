@@ -60,3 +60,38 @@ resource "aws_lb_target_group" "service" {
     matcher             = "200-399"
   }
 }
+
+# The listener: AppListener in app-ecs.yaml, HTTP only for now. Binds the ALB to
+# port 80; until it exists, :80 refuses the connection. The default action is
+# what a request gets when no rule matches: forward to the frontend. Forwarding
+# is also what puts a target group in use, so the ALB starts probing its targets.
+# Part 2 switches port, protocol and certificate on var.certificate_arn.
+resource "aws_lb_listener" "app" {
+  load_balancer_arn = aws_lb.main.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.service["frontend"].arn
+  }
+}
+
+# /api/* to the backend: ApiListenerRule in app-ecs.yaml. Rules are evaluated
+# lowest priority number first, whatever order they are written in; the default
+# action has no priority and runs only when no rule matches.
+resource "aws_lb_listener_rule" "api" {
+  listener_arn = aws_lb_listener.app.arn
+  priority     = 10
+
+  condition {
+    path_pattern {
+      values = ["/api/*"]
+    }
+  }
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.service["backend"].arn
+  }
+}
