@@ -21,7 +21,7 @@ resource "aws_vpc_security_group_ingress_rule" "alb_http" {
 # app-ecs.yaml. Port 80 stays open either way; with TLS on, it serves the
 # 301 to HTTPS.
 resource "aws_vpc_security_group_ingress_rule" "alb_https" {
-  count = var.certificate_arn == null ? 0 : 1
+  count = local.tls ? 1 : 0
 
   security_group_id = aws_security_group.alb.id
   cidr_ipv4         = "0.0.0.0/0"
