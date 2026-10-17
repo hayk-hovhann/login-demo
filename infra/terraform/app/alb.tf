@@ -61,19 +61,58 @@ resource "aws_lb_target_group" "service" {
   }
 }
 
-# The listener: AppListener in app-ecs.yaml, HTTP only for now. Binds the ALB to
-# port 80; until it exists, :80 refuses the connection. The default action is
-# what a request gets when no rule matches: forward to the frontend. Forwarding
-# is also what puts a target group in use, so the ALB starts probing its targets.
-# Part 2 switches port, protocol and certificate on var.certificate_arn.
+# The listener: AppListener in app-ecs.yaml. HTTP on 80 without a certificate,
+# HTTPS on 443 with one. TLS terminates here: the ALB decrypts and forwards to
+# the tasks as plain HTTP inside the VPC (both target groups are HTTP), which is
+# why the backend needs `trust proxy` to set a secure cookie. The default action
+# is what a request gets when no rule matches: forward to the frontend.
+# Forwarding is also what puts a target group in use, so the ALB starts probing
+# its targets.
 resource "aws_lb_listener" "app" {
+  load_balancer_arn = aws_lb.main.arn
+  port              = local.tls ? 443 : 80
+  protocol          = local.tls ? "HTTPS" : "HTTP"
+
+  # null leaves an argument out, as if it were never written: CFN's
+  # AWS::NoValue. An HTTP listener rejects both. TLS 1.2 floor, 1.3 offered.
+  ssl_policy      = local.tls ? "ELBSecurityPolicy-TLS13-1-2-2021-06" : null
+  certificate_arn = var.certificate_arn
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.service["frontend"].arn
+  }
+}
+
+# HttpRedirectListener in app-ecs.yaml: exists only with TLS. Port 80 stops
+# serving the app and 301s to HTTPS. The redirect is the default action with no
+# rules above it, so it covers /api/* too. A 301 makes most clients re-issue a
+# POST as a GET, so plain-HTTP API calls fail loudly rather than half-working.
+resource "aws_lb_listener" "http_redirect" {
+  count = local.tls ? 1 : 0
+
+  # LOAD-BEARING on the HTTP -> HTTPS upgrade. Turning TLS on moves the app
+  # listener 80 -> 443 and creates this one on 80. Nothing here references the
+  # app listener, so Terraform starts both at once, and the create reaches AWS
+  # while 80 is still taken: DuplicateListener (hit 2026-10-14). depends_on
+  # holds the create until the move is done. A from-scratch create never hits
+  # it, since the app listener is born on 443.
+  depends_on = [aws_lb_listener.app]
+
   load_balancer_arn = aws_lb.main.arn
   port              = 80
   protocol          = "HTTP"
 
   default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.service["frontend"].arn
+    type = "redirect"
+
+    # host, path and query are left to their defaults, #{host}, /#{path} and
+    # #{query}: the same address, only the scheme and port change.
+    redirect {
+      protocol    = "HTTPS"
+      port        = "443"
+      status_code = "HTTP_301"
+    }
   }
 }
 
