@@ -59,3 +59,71 @@ resource "aws_ecs_task_definition" "frontend" {
     }
   }])
 }
+
+# The frontend service: FrontendService in app-ecs.yaml. Keeps desired_count
+# tasks running from one task definition revision, registers each task's IP in
+# the frontend target group, and replaces a task that stops or fails its health
+# checks. Free on its own; its tasks are what bill.
+#
+# The name keeps CloudFormation's form for the same reason as the cluster's:
+# CD's locate step (cd.yml:215) finds the service by the substring
+# 'login-demo-app-FrontendService' and skips the deploy silently if nothing
+# matches.
+resource "aws_ecs_service" "frontend" {
+  # LOAD-BEARING. ECS rejects a target group that no listener forwards to yet,
+  # and nothing here references the listener, so without this Terraform would
+  # create both at once.
+  depends_on = [aws_lb_listener.app]
+
+  name            = "${var.app_name}-FrontendService"
+  cluster         = aws_ecs_cluster.main.id
+  task_definition = aws_ecs_task_definition.frontend.arn
+  desired_count   = 1
+
+  # Left out, the service falls back to EC2, and this cluster has no instances.
+  launch_type      = "FARGATE"
+  platform_version = "1.4.0"
+
+  # For a new task's first 60 s, ECS ignores the target group's health checks,
+  # so a slow start is not counted as a failure.
+  health_check_grace_period_seconds = 60
+
+  # Rolling deploy: start the new task, wait for it to go healthy, then stop the
+  # old one. With one desired task: never fewer than one running, at most two.
+  deployment_maximum_percent         = 200
+  deployment_minimum_healthy_percent = 100
+
+  # A deploy whose tasks keep failing is stopped and rolled back to the last
+  # deployment that completed.
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.main["frontend"].arn
+    container_name   = "frontend"
+    container_port   = 8080
+  }
+
+  # Public subnets plus a public IP: the task reaches ECR and CloudWatch Logs
+  # through the internet gateway, with no NAT gateway to pay for.
+  network_configuration {
+    subnets = [
+      data.aws_cloudformation_export.subnet_a_id.value,
+      data.aws_cloudformation_export.subnet_b_id.value,
+    ]
+    security_groups  = [aws_security_group.service.id]
+    assign_public_ip = true
+  }
+
+  # Two writers on one field. CD points the service at a new revision on every
+  # deploy (cd.yml:284); without this, the next apply would point it back at
+  # Terraform's. The price: once the service exists, an edit to the task
+  # definition above registers a revision nothing runs, because CD copies the
+  # revision the service runs (cd.yml:262), not the newest one. The field is
+  # read only when the service is created.
+  lifecycle {
+    ignore_changes = [task_definition]
+  }
+}

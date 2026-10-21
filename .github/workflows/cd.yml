@@ -150,11 +150,15 @@ jobs:
 
           # 3) swap the container image to the new SHA, and strip read-only /
           #    server-populated fields that register-task-definition rejects.
+          #    deregisteredAt is only on an INACTIVE revision, and the service
+          #    can be running one: a Terraform edit to the task definition
+          #    deregisters the revision the service was created on, and
+          #    ignore_changes keeps the service there.
           jq --arg IMG "$NEW_IMAGE" --arg NAME "$CONTAINER" '
             .containerDefinitions |= map(if .name == $NAME then .image = $IMG else . end)
             | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
                   .compatibilities, .registeredAt, .registeredBy,
-                  .enableFaultInjection)
+                  .deregisteredAt, .enableFaultInjection)
           ' td.json > td-new.json
 
           # 4) register the new revision
@@ -268,11 +272,15 @@ jobs:
 
           # 3) swap the container image to the new SHA, and strip read-only /
           #    server-populated fields that register-task-definition rejects.
+          #    deregisteredAt is only on an INACTIVE revision, and the service
+          #    can be running one: a Terraform edit to the task definition
+          #    deregisters the revision the service was created on, and
+          #    ignore_changes keeps the service there.
           jq --arg IMG "$NEW_IMAGE" --arg NAME "$CONTAINER" '
             .containerDefinitions |= map(if .name == $NAME then .image = $IMG else . end)
             | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
                   .compatibilities, .registeredAt, .registeredBy,
-                  .enableFaultInjection)
+                  .deregisteredAt, .enableFaultInjection)
           ' td.json > td-new.json
 
           # 4) register the new revision

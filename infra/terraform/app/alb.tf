@@ -27,8 +27,8 @@ resource "aws_lb" "main" {
 # load balancer, nothing probes.
 #
 # A map rather than logs.tf's set, because the two differ: each.value carries
-# the port and the health check path. aws_lb_target_group.service["backend"].
-resource "aws_lb_target_group" "service" {
+# the port and the health check path. aws_lb_target_group.main["backend"].
+resource "aws_lb_target_group" "main" {
   for_each = {
     # 8080, the unprivileged nginx port. nginx serves index.html, so / is a 200.
     frontend = { port = 8080, health_check_path = "/" }
@@ -80,7 +80,7 @@ resource "aws_lb_listener" "app" {
 
   default_action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.service["frontend"].arn
+    target_group_arn = aws_lb_target_group.main["frontend"].arn
   }
 }
 
@@ -131,6 +131,6 @@ resource "aws_lb_listener_rule" "api" {
 
   action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.service["backend"].arn
+    target_group_arn = aws_lb_target_group.main["backend"].arn
   }
 }
