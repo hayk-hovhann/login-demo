@@ -4,7 +4,7 @@
 #
 # The name keeps CloudFormation's capital C, unlike every other name here,
 # because three things find the cluster by name rather than by reference: CD's
-# locate step (cd.yml:115, :233) by the case-sensitive substring
+# locate step (cd.yml:115, :242) by the case-sensitive substring
 # 'login-demo-app-Cluster', skipping the deploy silently if nothing matches;
 # run-migration.sh:46, which builds the exact name; and the dashboard's
 # ClusterName dimension, once it is ported.
@@ -66,7 +66,7 @@ resource "aws_ecs_task_definition" "frontend" {
 # checks. Free on its own; its tasks are what bill.
 #
 # The name keeps CloudFormation's form for the same reason as the cluster's:
-# CD's locate step (cd.yml:215) finds the service by the substring
+# CD's locate step (cd.yml:224) finds the service by the substring
 # 'login-demo-app-FrontendService' and skips the deploy silently if nothing
 # matches.
 resource "aws_ecs_service" "frontend" {
@@ -118,11 +118,11 @@ resource "aws_ecs_service" "frontend" {
   }
 
   # Two writers on one field. CD points the service at a new revision on every
-  # deploy (cd.yml:284); without this, the next apply would point it back at
+  # deploy (cd.yml:302); without this, the next apply would point it back at
   # Terraform's. The price: once the service exists, an edit to the task
-  # definition above registers a revision nothing runs, because CD copies the
-  # revision the service runs (cd.yml:262), not the newest one. The field is
-  # read only when the service is created.
+  # definition above does not reach the tasks at apply. It waits for CD's next
+  # deploy, which copies the family's latest revision (cd.yml:282), so it picks
+  # the edit up. The field is read only when the service is created.
   lifecycle {
     ignore_changes = [task_definition]
   }
