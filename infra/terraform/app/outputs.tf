@@ -43,6 +43,12 @@ output "alb_dns_name" {
   value       = aws_lb.main.dns_name
 }
 
+# DashboardURL in app-ecs.yaml: one click from the terminal to the dashboard.
+output "dashboard_url" {
+  description = "CloudWatch console link to this session's dashboard."
+  value       = "https://console.aws.amazon.com/cloudwatch/home?region=${data.aws_region.current.region}#dashboards:name=${aws_cloudwatch_dashboard.main.dashboard_name}"
+}
+
 # MigrateLogGroupName in app-ecs.yaml. run-migration.sh:44 reads it to tail the
 # migration's logs; at cutover it switches to terraform output -raw.
 output "migrate_log_group_name" {
