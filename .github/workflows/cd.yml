@@ -140,20 +140,25 @@ jobs:
           NEW_IMAGE="$REGISTRY/$REPO:$SHA"
           echo "Deploying image: $NEW_IMAGE"
 
-          # 1) get the task-def ARN the service currently runs
+          # 1) get the family of the task def the service currently runs:
+          #    .../task-definition/<family>:<revision> -> <family>
+          #    (## drops everything through the last /, % the last :revision)
           TD_ARN=$(aws ecs describe-services --cluster "$CLUSTER_ARN" --services "$SERVICE_ARN" \
             --query "services[0].taskDefinition" --output text)
+          FAMILY="${TD_ARN##*/}"
+          FAMILY="${FAMILY%:*}"
 
-          # 2) fetch that task def as JSON
-          aws ecs describe-task-definition --task-definition "$TD_ARN" \
+          # 2) fetch the family's latest ACTIVE revision as JSON, not the one the
+          #    service runs. A Terraform edit to the task definition registers a
+          #    new revision that ignore_changes never moves the service to;
+          #    copying the latest is what carries that edit into this deploy.
+          aws ecs describe-task-definition --task-definition "$FAMILY" \
             --query "taskDefinition" > td.json
 
           # 3) swap the container image to the new SHA, and strip read-only /
           #    server-populated fields that register-task-definition rejects.
-          #    deregisteredAt is only on an INACTIVE revision, and the service
-          #    can be running one: a Terraform edit to the task definition
-          #    deregisters the revision the service was created on, and
-          #    ignore_changes keeps the service there.
+          #    deregisteredAt is only on an INACTIVE revision, which step 2 no
+          #    longer fetches; kept so a copy of one can never fail again.
           jq --arg IMG "$NEW_IMAGE" --arg NAME "$CONTAINER" '
             .containerDefinitions |= map(if .name == $NAME then .image = $IMG else . end)
             | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
@@ -262,20 +267,25 @@ jobs:
           NEW_IMAGE="$REGISTRY/$REPO:$SHA"
           echo "Deploying image: $NEW_IMAGE"
 
-          # 1) get the task-def ARN the service currently runs
+          # 1) get the family of the task def the service currently runs:
+          #    .../task-definition/<family>:<revision> -> <family>
+          #    (## drops everything through the last /, % the last :revision)
           TD_ARN=$(aws ecs describe-services --cluster "$CLUSTER_ARN" --services "$SERVICE_ARN" \
             --query "services[0].taskDefinition" --output text)
+          FAMILY="${TD_ARN##*/}"
+          FAMILY="${FAMILY%:*}"
 
-          # 2) fetch that task def as JSON
-          aws ecs describe-task-definition --task-definition "$TD_ARN" \
+          # 2) fetch the family's latest ACTIVE revision as JSON, not the one the
+          #    service runs. A Terraform edit to the task definition registers a
+          #    new revision that ignore_changes never moves the service to;
+          #    copying the latest is what carries that edit into this deploy.
+          aws ecs describe-task-definition --task-definition "$FAMILY" \
             --query "taskDefinition" > td.json
 
           # 3) swap the container image to the new SHA, and strip read-only /
           #    server-populated fields that register-task-definition rejects.
-          #    deregisteredAt is only on an INACTIVE revision, and the service
-          #    can be running one: a Terraform edit to the task definition
-          #    deregisters the revision the service was created on, and
-          #    ignore_changes keeps the service there.
+          #    deregisteredAt is only on an INACTIVE revision, which step 2 no
+          #    longer fetches; kept so a copy of one can never fail again.
           jq --arg IMG "$NEW_IMAGE" --arg NAME "$CONTAINER" '
             .containerDefinitions |= map(if .name == $NAME then .image = $IMG else . end)
             | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
