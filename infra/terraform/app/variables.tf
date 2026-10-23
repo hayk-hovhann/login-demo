@@ -22,3 +22,9 @@ variable "certificate_arn" {
   default     = null
 }
 
+variable "notification_email" {
+  description = "Address the alarm topic emails. Null = no subscriber: the topic still exists, nobody hears from it."
+  type        = string
+  default     = null
+}
+
