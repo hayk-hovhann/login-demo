@@ -100,6 +100,15 @@ resource "aws_ecs_service" "frontend" {
     rollback = true
   }
 
+  # What "Apply complete!" means. Left at the default false, apply returns as
+  # soon as ECS has accepted the service, so a broken image still ends in
+  # success while the circuit breaker gives up out of sight. True waits for the
+  # deployment to complete, its tasks running and healthy in the target group,
+  # and fails the apply with ECS's reason if it doesn't. Costs the time for the
+  # first task to go healthy, on create; Terraform rarely updates the service,
+  # since CD owns the revision. Gives up after the 20m default timeout.
+  wait_for_steady_state = true
+
   load_balancer {
     target_group_arn = aws_lb_target_group.main["frontend"].arn
     container_name   = "frontend"
