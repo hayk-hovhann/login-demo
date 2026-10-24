@@ -27,19 +27,26 @@ resource "aws_lb" "main" {
 # load balancer, nothing probes.
 #
 # A map rather than logs.tf's set, because the two differ: each.value carries
-# the port and the health check path. aws_lb_target_group.main["backend"].
+# the name prefix, the port and the health check path.
+# aws_lb_target_group.main["backend"].
 resource "aws_lb_target_group" "main" {
   for_each = {
     # 8080, the unprivileged nginx port. nginx serves index.html, so / is a 200.
-    frontend = { port = 8080, health_check_path = "/" }
+    frontend = { name_prefix = "front-", port = 8080, health_check_path = "/" }
 
     # Liveness only, and never touches Postgres, so tasks go healthy before the
     # migration has run. Not /api/auth/me: anonymous, it returns 403, outside
     # the matcher, so no task could ever go healthy.
-    backend = { port = 3000, health_check_path = "/api/health" }
+    backend = { name_prefix = "back-", port = 3000, health_check_path = "/api/health" }
   }
 
-  name     = "${var.app_name}-${each.key}"
+  # A prefix, not a name: the provider appends a 26-character unique ID at every
+  # create, so a replacement never collides with the group it replaces (names
+  # are unique per region per account). AWS caps the whole name at 32, which
+  # leaves the prefix 6. Nothing reads the name: the alarms and the dashboard
+  # use arn_suffix, the listener, the rule and ecs.tf use arn.
+  name_prefix = each.value.name_prefix
+
   vpc_id   = data.aws_cloudformation_export.vpc_id.value
   port     = each.value.port
   protocol = "HTTP"
@@ -58,6 +65,16 @@ resource "aws_lb_target_group" "main" {
     healthy_threshold   = 2
     unhealthy_threshold = 3
     matcher             = "200-399"
+  }
+
+  # LOAD-BEARING on any change that forces a replacement: port, protocol,
+  # vpc_id, target_type, name_prefix. AWS can't modify those in place. By
+  # default Terraform deletes first, and AWS refuses with ResourceInUse while
+  # the listener or the rule still forwards here. Reversed, it creates the new
+  # group, repoints both, then deletes the old one. Needs name_prefix above, or
+  # the create fails with "ELBv2 Target Group (...) already exists".
+  lifecycle {
+    create_before_destroy = true
   }
 }
 
