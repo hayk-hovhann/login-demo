@@ -1,15 +1,23 @@
-# vpc_id and subnet_ids are temporary: they prove the network exports resolve.
-# Replaced by the real outputs (URL, LoadBalancerDnsName, ...) as resources land.
-
-output "vpc_id" {
-  value = data.aws_cloudformation_export.vpc_id.value
+# URL in app-ecs.yaml. Scheme from the listener shape, host from the ALB. Under
+# the domain certificate the browser address is the per-session app CNAME
+# instead: the ALB's own name isn't on that cert, so a browser would warn.
+output "url" {
+  description = "App URL: frontend at /, backend at /api/*."
+  value       = "${local.tls ? "https" : "http"}://${aws_lb.main.dns_name}"
 }
 
-output "subnet_ids" {
-  value = [
-    data.aws_cloudformation_export.subnet_a_id.value,
-    data.aws_cloudformation_export.subnet_b_id.value,
-  ]
+# MigrateTaskDefinitionFamily in app-ecs.yaml: what run-migration.sh passes to
+# run-task.
+output "migrate_task_definition_family" {
+  description = "Family of the one-shot Prisma migration task. Run it with ./infra/run-migration.sh."
+  value       = aws_ecs_task_definition.migrate.family
+}
+
+# Not in app-ecs.yaml, where run-migration.sh built the cluster's name from the
+# stack's. Read instead, like everything else the script needs from here.
+output "cluster_name" {
+  description = "ECS cluster the services and the migration task run in."
+  value       = aws_ecs_cluster.main.name
 }
 
 # RedisClientSgId in app-ecs.yaml, minus the Export: Terraform cannot create
@@ -49,8 +57,8 @@ output "dashboard_url" {
   value       = "https://console.aws.amazon.com/cloudwatch/home?region=${data.aws_region.current.region}#dashboards:name=${aws_cloudwatch_dashboard.main.dashboard_name}"
 }
 
-# MigrateLogGroupName in app-ecs.yaml. run-migration.sh:44 reads it to tail the
-# migration's logs; at cutover it switches to terraform output -raw.
+# MigrateLogGroupName in app-ecs.yaml. run-migration.sh reads it to tail the
+# migration's logs.
 output "migrate_log_group_name" {
   description = "CloudWatch log group the one-shot migration task writes to."
   value       = aws_cloudwatch_log_group.ecs["migrate"].name

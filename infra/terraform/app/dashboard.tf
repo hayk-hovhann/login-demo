@@ -17,11 +17,9 @@
 locals {
   alb_suffix = aws_lb.main.arn_suffix
 
-  # ServiceName as AWS/ECS publishes it. The backend service isn't in Terraform
-  # yet, so its entry is the literal name it will have; switch it to
-  # aws_ecs_service.backend.name once it lands. Its lines are empty until then.
+  # ServiceName as AWS/ECS publishes it.
   ecs_services = {
-    backend  = "${var.app_name}-BackendService"
+    backend  = aws_ecs_service.backend.name
     frontend = aws_ecs_service.frontend.name
   }
 
