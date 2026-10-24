@@ -28,18 +28,21 @@ resource "aws_iam_role_policy_attachment" "task_execution_managed" {
 # The managed policy does not cover Secrets Manager. Without this, a task that
 # references a secret fails to start with ResourceInitializationError.
 #
-# The session secret only, for now. The RDS secret (the data stack's
-# DbSecretArn export) joins this list with the backend task definition, the
-# first resource here that needs the data stack anyway.
+# Two secrets: the session key, this config's own, and the RDS-managed master
+# secret, the data stack's DbSecretArn export. The bare secret ARN: the
+# :username:: suffix is ECS's valueFrom syntax, not part of the IAM resource.
 resource "aws_iam_role_policy" "task_execution_read_secrets" {
   name = "read-secrets"
   role = aws_iam_role.task_execution.name
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect   = "Allow"
-      Action   = "secretsmanager:GetSecretValue"
-      Resource = [aws_secretsmanager_secret.session.arn]
+      Effect = "Allow"
+      Action = "secretsmanager:GetSecretValue"
+      Resource = [
+        aws_secretsmanager_secret.session.arn,
+        data.aws_cloudformation_export.db_secret_arn.value,
+      ]
     }]
   })
 }

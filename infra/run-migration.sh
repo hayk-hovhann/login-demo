@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
 # Run pending Prisma migrations as a one-shot Fargate task, then report the result.
 #
-# Why a script and not a stack Output: an Output can only hand you a string. This
+# Why a script and not an output: an output can only hand you a string. This
 # waits for the task, surfaces the container exit code, and tails the logs — and
-# it resolves subnet/SG ids from the stack exports at run time, so nothing has to
-# be baked into the template.
+# it resolves everything at run time, so nothing has to be baked in: the app's
+# names from Terraform's outputs, the subnets and the DB client group from the
+# network and data stacks' exports.
 #
 #   ./infra/run-migration.sh
 #
-# Stack names can be overridden by env var if you deploy under different names.
+# Stack names and the Terraform directory can be overridden by env var.
 set -euo pipefail
 
-APP_STACK="${APP_STACK:-login-demo-app}"
 NETWORK_STACK="${NETWORK_STACK:-login-demo-network}"
 DATA_STACK="${DATA_STACK:-login-demo-data}"
+TF_DIR="${TF_DIR:-$(dirname "$0")/terraform/app}"
 
 die() { echo "error: $*" >&2; exit 1; }
 
@@ -28,23 +29,21 @@ export_value() {
   echo "$value"
 }
 
-stack_output() {
+# Unlike list-exports, a missing output is an error: terraform exits non-zero
+# and prints its own message, so no empty-string check is needed.
+tf_output() {
   local name="$1" value
-  value=$(aws cloudformation describe-stacks --stack-name "$APP_STACK" \
-            --query "Stacks[0].Outputs[?OutputKey=='${name}'].OutputValue" --output text)
-  if [ -z "$value" ] || [ "$value" = "None" ]; then
-    die "output '${name}' not found on ${APP_STACK}"
-  fi
+  value=$(terraform -chdir="$TF_DIR" output -raw "$name") \
+    || die "output '${name}' not found in ${TF_DIR} — has the app been applied?"
   echo "$value"
 }
 
 SUBNET_A=$(export_value "${NETWORK_STACK}-SubnetAId")
 SUBNET_B=$(export_value "${NETWORK_STACK}-SubnetBId")
 DB_CLIENT_SG=$(export_value "${DATA_STACK}-DbClientSgId")
-LOG_GROUP=$(stack_output MigrateLogGroupName)
-
-CLUSTER="${APP_STACK}-Cluster"
-TASK_DEF="${APP_STACK}-migrate"
+LOG_GROUP=$(tf_output migrate_log_group_name)
+CLUSTER=$(tf_output cluster_name)
+TASK_DEF=$(tf_output migrate_task_definition_family)
 
 echo "cluster:  ${CLUSTER}"
 echo "task def: ${TASK_DEF}"
