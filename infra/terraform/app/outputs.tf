@@ -21,8 +21,8 @@ output "cluster_name" {
 }
 
 # RedisClientSgId in app-ecs.yaml, minus the Export: Terraform cannot create
-# CloudFormation exports, so bastion.yaml:101's ImportValue finds nothing.
-# The bastion has to take this ID as a parameter instead.
+# CloudFormation exports, so bastion.yaml takes this ID as its RedisClientSgId
+# parameter instead.
 output "redis_client_security_group_id" {
   description = "Attach to anything that needs Redis on 6379 (the bastion, for GUI tunneling)."
   value       = aws_security_group.redis_client.id
