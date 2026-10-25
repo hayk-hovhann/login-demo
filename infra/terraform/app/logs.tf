@@ -1,6 +1,6 @@
-# CloudWatch log groups: BackendLogGroup, FrontendLogGroup and MigrateLogGroup
-# in app-ecs.yaml. Where each task's stdout and stderr land. Free while empty;
-# stored volume is what bills, and 7-day retention keeps it small.
+# CloudWatch log groups, one per task family: where each task's stdout and
+# stderr land. Free while empty; stored volume is what bills, and 7-day
+# retention keeps it small.
 #
 # They must exist before any task starts: the execution role's managed policy
 # can write log streams into a group but cannot create one. Destroy deletes

@@ -1,5 +1,5 @@
-# The express-session signing key: SessionSecret in app-ecs.yaml. ECS reads it
-# at task start and hands it to the backend as SESSION_SECRET.
+# The express-session signing key. ECS reads it at task start and hands it to
+# the backend as SESSION_SECRET.
 #
 # This block is only the container. Its value is set by a separate resource.
 resource "aws_secretsmanager_secret" "session" {
@@ -13,9 +13,9 @@ resource "aws_secretsmanager_secret" "session" {
   recovery_window_in_days = 0
 }
 
-# Generates the value: GenerateSecretString in app-ecs.yaml, here as a direct
-# call to AWS's own password generator. Ephemeral: the result exists only for
-# the run and is never written to plan or state.
+# Generates the value with a direct call to AWS's own password generator.
+# Ephemeral: the result exists only for the run and is never written to plan or
+# state.
 ephemeral "aws_secretsmanager_random_password" "session" {
   password_length     = 64
   exclude_punctuation = true # keeps it shell/env-var safe

@@ -1,7 +1,7 @@
 # Redis, the session store. Its two security groups live in security_groups.tf.
 
-# Which subnets ElastiCache may place the node in: RedisSubnetGroup in
-# app-ecs.yaml. Free on its own; the node that uses it is what bills.
+# Which subnets ElastiCache may place the node in. Free on its own; the node
+# that uses it is what bills.
 resource "aws_elasticache_subnet_group" "redis" {
   name        = "${var.app_name}-redis"
   description = "Subnets ElastiCache may place the Redis node in."
@@ -11,11 +11,11 @@ resource "aws_elasticache_subnet_group" "redis" {
   ]
 }
 
-# Single-node Redis, cluster mode disabled: RedisReplicationGroup in
-# app-ecs.yaml. A replication group, not aws_elasticache_cluster, because the
-# single-cluster endpoint rendered empty on engine 7.1 under CloudFormation.
-# One primary, zero replicas. ~$0.016/hr, and the slowest thing here: measured
-# 4m20s-5m31s to create, 4m18s-7m53s to destroy.
+# Single-node Redis, cluster mode disabled. A replication group, not
+# aws_elasticache_cluster, because the single-cluster endpoint rendered empty
+# on engine 7.1 under CloudFormation. One primary, zero replicas. ~$0.016/hr,
+# and the slowest thing here: measured 4m20s-5m31s to create, 4m18s-7m53s to
+# destroy.
 #
 # No final_snapshot_identifier, so destroy deletes it outright: the
 # DeletionPolicy: Delete of the CloudFormation version. Sessions are disposable.

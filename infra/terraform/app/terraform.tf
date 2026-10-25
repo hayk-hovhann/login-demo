@@ -1,3 +1,7 @@
+# Ported from infra/app-ecs.yaml, the CloudFormation template this config
+# replaced, since removed: git show ed5f085:infra/app-ecs.yaml. A comment here
+# that compares with CloudFormation means that template, unless it names
+# another stack.
 terraform {
   required_version = "~> 1.16"
 
