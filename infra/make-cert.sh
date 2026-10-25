@@ -9,8 +9,9 @@
 # THE NORMAL PATH DOES NOT USE THIS SCRIPT
 # HTTPS normally comes from the ACM-issued *.hayk-lab.dedyn.io certificate: a
 # public CA signed it, so browsers trust it with no warning. It exists before the
-# stack does, so pass its ARN as CertificateArn at CREATE, then point a CNAME for
-# app.hayk-lab.dedyn.io at the ALB. One phase, no minting.
+# app does and is certificate_arn in the committed terraform.tfvars, so the first
+# apply is already HTTPS; then point a CNAME for app.hayk-lab.dedyn.io at the
+# ALB. One phase, no minting.
 #
 # Reach for this script only when that path is unavailable — the domain lapsed,
 # deSEC is down, the cert expired or failed renewal. No public CA will sign the
@@ -20,20 +21,24 @@
 # never heard of this root.
 #
 # This path IS two-phase, because the leaf must name the ALB's DNS name, which
-# does not exist until the stack does:
-#   1. deploy login-demo-app with CertificateArn=''   (HTTP only)
+# does not exist until the ALB does:
+#   1. apply infra/terraform/app with certificate_arn
+#      commented out in terraform.tfvars                (HTTP only)
 #   2. ./infra/make-cert.sh
-#   3. deploy again with the ARN it prints            (443 + 301 + secure cookies)
+#   3. follow what it prints: the ARN into tfvars,
+#      apply, roll the backend                          (443 + 301 + secure cookies)
 #
 # SCOPE: every mode acts only on IMPORTED certificates. The ACM-issued domain cert
 # carries the same Project tag, and a tag-only match would re-import over it or
 # delete it at teardown.
 #
-# STACK overrides the app stack name; CERT_DIR the local key/cert location.
+# APP_NAME overrides the app's name prefix (var.app_name); TF_DIR the Terraform
+# directory; CERT_DIR the local key/cert location.
 set -euo pipefail
 
-STACK="${STACK:-login-demo-app}"
+APP_NAME="${APP_NAME:-login-demo-app}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TF_DIR="${TF_DIR:-${REPO_ROOT}/infra/terraform/app}"
 CERT_DIR="${CERT_DIR:-${REPO_ROOT}/infra/certs}"
 
 # Tag used to find the certificate again at teardown. An imported ACM cert costs
@@ -44,13 +49,12 @@ TAG_VALUE='login-demo'
 
 die() { echo "error: $*" >&2; exit 1; }
 
-stack_output() {
-  local stack="$1" name="$2" value
-  value=$(aws cloudformation describe-stacks --stack-name "$stack" \
-            --query "Stacks[0].Outputs[?OutputKey=='${name}'].OutputValue" --output text 2>/dev/null || true)
-  if [ -z "$value" ] || [ "$value" = "None" ]; then
-    die "output '${name}' not found on ${stack} — is it deployed?"
-  fi
+# A missing output is an error: terraform exits non-zero and prints its own
+# message, so no empty-string check is needed.
+tf_output() {
+  local name="$1" value
+  value=$(terraform -chdir="$TF_DIR" output -raw "$name") \
+    || die "output '${name}' not found in ${TF_DIR} — has the app been applied?"
   echo "$value"
 }
 
@@ -95,8 +99,9 @@ case "${1:-mint}" in
                  --query 'length(Certificate.InUseBy)' --output text)
       if [ "$in_use" != "0" ]; then
         die "certificate is still attached to a listener: ${arn}
-  detach it first — update the stack with CertificateArn='' (reverts to HTTP),
-  or delete ${STACK} entirely. ACM refuses to delete an in-use certificate."
+  detach it first — put certificate_arn in ${TF_DIR}/terraform.tfvars back to
+  the domain cert (or comment it out for HTTP) and apply, or destroy the app.
+  ACM refuses to delete an in-use certificate."
       fi
       aws acm delete-certificate --certificate-arn "$arn"
       echo "deleted ${arn}"
@@ -112,7 +117,8 @@ esac
 
 command -v openssl >/dev/null || die "openssl not found"
 
-DNS_NAME=$(stack_output "$STACK" LoadBalancerDnsName)
+DNS_NAME=$(tf_output alb_dns_name)
+CLUSTER=$(tf_output cluster_name)
 
 mkdir -p "$CERT_DIR"
 # Private keys land here. .gitignore covers infra/certs/, but keep the directory
@@ -177,7 +183,7 @@ else
     --certificate "fileb://${CERT_DIR}/server.pem" \
     --private-key "fileb://${CERT_DIR}/server.key" \
     --certificate-chain "fileb://${CERT_DIR}/ca.pem" \
-    --tags "Key=${TAG_KEY},Value=${TAG_VALUE}" "Key=Name,Value=${STACK}-alb" \
+    --tags "Key=${TAG_KEY},Value=${TAG_VALUE}" "Key=Name,Value=${APP_NAME}-alb" \
     --query CertificateArn --output text)
 fi
 
@@ -186,27 +192,22 @@ cat <<EOF
 certificate covers:  ${DNS_NAME}
 arn:                 ${CERT_ARN}
 
-attach it (the stack flips to 443 + a 301 from 80, and COOKIE_SECURE to true):
+attach it (the listener moves to 443, 80 starts 301ing, COOKIE_SECURE flips to true):
 
-  aws cloudformation deploy --stack-name ${STACK} \\
-    --template-file infra/app-ecs.yaml \\
-    --capabilities CAPABILITY_IAM \\
-    --parameter-overrides CertificateArn=${CERT_ARN}
+  1. in ${TF_DIR}/terraform.tfvars:
+       certificate_arn = "${CERT_ARN}"
 
-\`deploy\`, not \`update-stack\`: it reuses the previous value of every parameter you
-do not name, so this cannot silently reset NotificationEmail (deleting the SNS
-subscription) or the image tags. update-stack reverts omissions to the TEMPLATE
-DEFAULT and would need four explicit UsePreviousValue entries to be equivalent.
+  2. terraform -chdir=${TF_DIR} apply
 
-No --disable-rollback: this update replaces the backend task definition, and
-CloudFormation refuses replacements on a stack with rollback disabled.
+  3. aws ecs update-service --cluster ${CLUSTER} \\
+       --service ${APP_NAME}-BackendService --task-definition ${APP_NAME}-backend \\
+       --query 'service.taskDefinition' --output text \\
+     && aws ecs wait services-stable --cluster ${CLUSTER} --services ${APP_NAME}-BackendService
 
-Image tags are worth a thought either way. Whatever this update reuses is what
-the STACK recorded, which is not necessarily what is RUNNING — CD deploys by
-mutating the ECS service behind CloudFormation's back. This update re-registers
-the backend task definition (COOKIE_SECURE changes), so a stale recorded tag
-rolls the service backwards. If CD has shipped since the stack was created, add
-BackendImageTag=<sha> FrontendImageTag=<sha> to the overrides.
+Step 3 because the backend service ignores task_definition (CD owns it): the
+apply registers a revision with COOKIE_SECURE=true, but the running task keeps
+the old one until CD's next backend deploy or this call. A family with no
+revision means its latest ACTIVE one. Without it, login over HTTPS looks broken.
 
 then verify the chain for real (no -k) — want 200:
 
