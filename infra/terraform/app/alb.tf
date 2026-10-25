@@ -1,8 +1,8 @@
-# The load balancer: LoadBalancer in app-ecs.yaml. AWS runs its nodes in both
-# subnets, each one an ENI wearing the alb group, and one DNS name fronts them
-# all. Use the name, never the IPs: they change as AWS replaces nodes. Bills
-# from creation, ~$0.0225/hr, with or without traffic, and accepts nothing
-# until a listener exists.
+# The load balancer. AWS runs its nodes in both subnets, each one an ENI
+# wearing the alb group, and one DNS name fronts them all. Use the name, never
+# the IPs: they change as AWS replaces nodes. Bills from creation,
+# ~$0.0225/hr, with or without traffic, and accepts nothing until a listener
+# exists.
 resource "aws_lb" "main" {
   name               = var.app_name
   load_balancer_type = "application"
@@ -20,11 +20,10 @@ resource "aws_lb" "main" {
   ]
 }
 
-# Target groups: FrontendTargetGroup and BackendTargetGroup in app-ecs.yaml.
-# Where the ALB sends a request once a rule has picked a service, and how it
-# health-checks each destination. Created empty: each ECS service registers its
-# tasks' IPs as they start. Free, and inert until a listener uses one; with no
-# load balancer, nothing probes.
+# Target groups: where the ALB sends a request once a rule has picked a
+# service, and how it health-checks each destination. Created empty: each ECS
+# service registers its tasks' IPs as they start. Free, and inert until a
+# listener uses one; with no load balancer, nothing probes.
 #
 # A map rather than logs.tf's set, because the two differ: each.value carries
 # the name prefix, the port and the health check path.
@@ -78,13 +77,12 @@ resource "aws_lb_target_group" "main" {
   }
 }
 
-# The listener: AppListener in app-ecs.yaml. HTTP on 80 without a certificate,
-# HTTPS on 443 with one. TLS terminates here: the ALB decrypts and forwards to
-# the tasks as plain HTTP inside the VPC (both target groups are HTTP), which is
-# why the backend needs `trust proxy` to set a secure cookie. The default action
-# is what a request gets when no rule matches: forward to the frontend.
-# Forwarding is also what puts a target group in use, so the ALB starts probing
-# its targets.
+# The listener. HTTP on 80 without a certificate, HTTPS on 443 with one. TLS
+# terminates here: the ALB decrypts and forwards to the tasks as plain HTTP
+# inside the VPC (both target groups are HTTP), which is why the backend needs
+# `trust proxy` to set a secure cookie. The default action is what a request
+# gets when no rule matches: forward to the frontend. Forwarding is also what
+# puts a target group in use, so the ALB starts probing its targets.
 resource "aws_lb_listener" "app" {
   load_balancer_arn = aws_lb.main.arn
   port              = local.tls ? 443 : 80
@@ -101,10 +99,10 @@ resource "aws_lb_listener" "app" {
   }
 }
 
-# HttpRedirectListener in app-ecs.yaml: exists only with TLS. Port 80 stops
-# serving the app and 301s to HTTPS. The redirect is the default action with no
-# rules above it, so it covers /api/* too. A 301 makes most clients re-issue a
-# POST as a GET, so plain-HTTP API calls fail loudly rather than half-working.
+# The redirect listener, which exists only with TLS. Port 80 stops serving the
+# app and 301s to HTTPS. The redirect is the default action with no rules above
+# it, so it covers /api/* too. A 301 makes most clients re-issue a POST as a
+# GET, so plain-HTTP API calls fail loudly rather than half-working.
 resource "aws_lb_listener" "http_redirect" {
   count = local.tls ? 1 : 0
 
@@ -133,9 +131,9 @@ resource "aws_lb_listener" "http_redirect" {
   }
 }
 
-# /api/* to the backend: ApiListenerRule in app-ecs.yaml. Rules are evaluated
-# lowest priority number first, whatever order they are written in; the default
-# action has no priority and runs only when no rule matches.
+# /api/* to the backend. Rules are evaluated lowest priority number first,
+# whatever order they are written in; the default action has no priority and
+# runs only when no rule matches.
 resource "aws_lb_listener_rule" "api" {
   listener_arn = aws_lb_listener.app.arn
   priority     = 10

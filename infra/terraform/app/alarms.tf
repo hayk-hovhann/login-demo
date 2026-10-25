@@ -1,14 +1,13 @@
-# SNS topic: AlarmTopic and AlarmEmailSubscription in app-ecs.yaml. The fan-out
-# point between the alarms and whoever must hear about them: an alarm publishes
-# to the topic and never knows the subscribers, so adding one (Slack, a pager)
-# never touches an alarm. The topic is free; email deliveries are free up to
-# 1,000 a month.
+# SNS topic: the fan-out point between the alarms and whoever must hear about
+# them. An alarm publishes to the topic and never knows the subscribers, so
+# adding one (Slack, a pager) never touches an alarm. The topic is free; email
+# deliveries are free up to 1,000 a month.
 resource "aws_sns_topic" "alarms" {
   name = "${var.app_name}-alarms"
 }
 
-# HasEmail in app-ecs.yaml: no address, no subscriber. count = 0 creates
-# nothing; one address makes aws_sns_topic_subscription.alarm_email[0].
+# No address, no subscriber. count = 0 creates nothing; one address makes
+# aws_sns_topic_subscription.alarm_email[0].
 #
 # SNS first mails a confirmation link and delivers nothing until it is clicked.
 # A new topic every session means a new link every session. Terraform cannot
@@ -23,11 +22,10 @@ resource "aws_sns_topic_subscription" "alarm_email" {
   endpoint  = var.notification_email
 }
 
-# Backend5xxAlarm in app-ecs.yaml. The backend is up but erroring: its tasks
-# answered more than 5 HTTP 5xx in one minute. Target 5xx means the app itself
-# threw (a bug); the ALB's own 5xx, no target reachable, is a different metric.
-# Sparse: emitted only when a 5xx happens, so missing data counts as healthy.
-# Free: the first 10 alarms are.
+# The backend is up but erroring: its tasks answered more than 5 HTTP 5xx in
+# one minute. Target 5xx means the app itself threw (a bug); the ALB's own 5xx,
+# no target reachable, is a different metric. Sparse: emitted only when a 5xx
+# happens, so missing data counts as healthy. Free: the first 10 alarms are.
 resource "aws_cloudwatch_metric_alarm" "backend_5xx" {
   alarm_name        = "${var.app_name}-backend-5xx"
   alarm_description = "Backend returned more than 5 HTTP 5xx responses in a minute."
@@ -53,11 +51,11 @@ resource "aws_cloudwatch_metric_alarm" "backend_5xx" {
   ok_actions    = [aws_sns_topic.alarms.arn]
 }
 
-# BackendUnhealthyHostAlarm in app-ecs.yaml, plus the frontend copy it never
-# had: a frontend crash-loop used to churn tasks for minutes with nothing
-# alerting. Fires when a target group has had no healthy task for 3 straight
-# minutes. One per target group, keyed like them:
-# aws_cloudwatch_metric_alarm.unhealthy["frontend"].
+# Fires when a target group has had no healthy task for 3 straight minutes.
+# One per target group, keyed like them:
+# aws_cloudwatch_metric_alarm.unhealthy["frontend"]. The frontend's matters as
+# much as the backend's: without it, a frontend crash-loop churns tasks for
+# minutes with nothing alerting.
 resource "aws_cloudwatch_metric_alarm" "unhealthy" {
   for_each = aws_lb_target_group.main
 

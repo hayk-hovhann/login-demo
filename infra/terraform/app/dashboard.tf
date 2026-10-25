@@ -1,4 +1,4 @@
-# Dashboard in app-ecs.yaml, grown into a production layout: a saved view of
+# The dashboard, in a production layout: a saved view of
 # metrics the ALB, ECS and ElastiCache already publish for free. Created and
 # destroyed with the stack, so it answers "is this session healthy right now",
 # not long-term trends. Free: the first 3 dashboards are.

@@ -1,6 +1,6 @@
-# The task execution role: TaskExecutionRole in app-ecs.yaml. What Fargate
-# itself uses to START a task, before any app code runs: pull the image from
-# ECR, ship logs to CloudWatch, and fetch secrets to inject as env vars.
+# The task execution role. What Fargate itself uses to START a task, before
+# any app code runs: pull the image from ECR, ship logs to CloudWatch, and
+# fetch secrets to inject as env vars.
 #
 # Split into three resources, like the security-group rules: the role, the
 # AWS-managed policy attached to it, and an inline policy. aws_iam_role's own
@@ -47,10 +47,10 @@ resource "aws_iam_role_policy" "task_execution_read_secrets" {
   })
 }
 
-# The task role: TaskRole in app-ecs.yaml. What code inside a RUNNING task uses
-# for its own AWS calls. The app makes none; the only user is ECS Exec, whose
-# agent in the container opens its SSM channel with it. Only the backend's task
-# definition names this role.
+# The task role. What code inside a RUNNING task uses for its own AWS calls.
+# The app makes none; the only user is ECS Exec, whose agent in the container
+# opens its SSM channel with it. Only the backend's task definition names this
+# role.
 #
 # Same trust policy as the execution role. Which role does which job is decided
 # by the task definition: execution_role_arn to start, task_role_arn to run.
@@ -70,7 +70,7 @@ resource "aws_iam_role" "task" {
 # ECS Exec's channel. Resource is "*" because ssmmessages cannot be scoped:
 # AWS's authorization reference lists no resource types for it. Granted whether
 # exec is on or off; the switch is the backend service's enable_execute_command
-# (EnableExec in app-ecs.yaml, default off).
+# (var.enable_exec, default off).
 resource "aws_iam_role_policy" "task_ecs_exec" {
   name = "ecs-exec-ssm"
   role = aws_iam_role.task.name

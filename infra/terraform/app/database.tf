@@ -1,6 +1,5 @@
 # The data stack stays in CloudFormation until its own arc. Same seam as
-# network.tf: where app-ecs.yaml imports ${DataStackName}-Db*, this config
-# reads a data source.
+# network.tf: its Db* exports are read through data sources, not imported.
 #
 # The missing lock matters more here than for the network, which is permanent:
 # data comes down every session, and CloudFormation won't stop it going first.

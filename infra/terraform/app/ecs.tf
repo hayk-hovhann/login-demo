@@ -1,6 +1,6 @@
-# The ECS cluster: Cluster in app-ecs.yaml. The namespace the backend and
-# frontend services run in. On Fargate it holds no machines, so it costs nothing
-# on its own; the tasks placed in it are what bill.
+# The ECS cluster. The namespace the backend and frontend services run in. On
+# Fargate it holds no machines, so it costs nothing on its own; the tasks placed
+# in it are what bill.
 #
 # The name keeps CloudFormation's capital C, unlike every other name here,
 # because CD's locate step (cd.yml:115, :242) finds the cluster by the
@@ -26,9 +26,9 @@ data "aws_ecr_repository" "backend" {
 
 data "aws_region" "current" {}
 
-# The frontend task definition: FrontendTaskDefinition in app-ecs.yaml. The
-# recipe ECS starts a task from: image, size, port, roles, log destination.
-# Free; nothing runs until a service or run-task uses it.
+# The frontend task definition. The recipe ECS starts a task from: image, size,
+# port, roles, log destination. Free; nothing runs until a service or run-task
+# uses it.
 #
 # Immutable. Each registration is a numbered revision of a family
 # (login-demo-app-frontend:19), so any change here plans as a replacement, never
@@ -65,10 +65,10 @@ resource "aws_ecs_task_definition" "frontend" {
   }])
 }
 
-# The frontend service: FrontendService in app-ecs.yaml. Keeps desired_count
-# tasks running from one task definition revision, registers each task's IP in
-# the frontend target group, and replaces a task that stops or fails its health
-# checks. Free on its own; its tasks are what bill.
+# The frontend service. Keeps desired_count tasks running from one task
+# definition revision, registers each task's IP in the frontend target group,
+# and replaces a task that stops or fails its health checks. Free on its own;
+# its tasks are what bill.
 #
 # The name keeps CloudFormation's form for the same reason as the cluster's:
 # CD's locate step (cd.yml:224) finds the service by the substring
@@ -142,11 +142,11 @@ resource "aws_ecs_service" "frontend" {
   }
 }
 
-# The migrate task definition: MigrateTaskDefinition in app-ecs.yaml. Not a
-# service: nothing runs until run-migration.sh calls run-task with it, and the
-# task stops when `prisma migrate deploy` exits. Deliberately not an init
-# container on the backend: a failed migration there trips the circuit breaker,
-# whose rollback deletes the logs you need to diagnose it.
+# The migrate task definition. Not a service: nothing runs until
+# run-migration.sh calls run-task with it, and the task stops when
+# `prisma migrate deploy` exits. Deliberately not an init container on the
+# backend: a failed migration there trips the circuit breaker, whose rollback
+# deletes the logs you need to diagnose it.
 #
 # run-migration.sh starts it by the family the migrate_task_definition_family
 # output names, and supplies the network config itself (:61), the db client
@@ -192,10 +192,10 @@ resource "aws_ecs_task_definition" "migrate" {
   }])
 }
 
-# The backend task definition: BackendTaskDefinition in app-ecs.yaml. The
-# frontend's shape plus what the API needs to reach Postgres and Redis and to
-# sign sessions. Same two-writer story as the frontend: CD copies the family's
-# latest revision on every backend deploy (cd.yml:155).
+# The backend task definition. The frontend's shape plus what the API needs to
+# reach Postgres and Redis and to sign sessions. Same two-writer story as the
+# frontend: CD copies the family's latest revision on every backend deploy
+# (cd.yml:155).
 resource "aws_ecs_task_definition" "backend" {
   family                   = "${var.app_name}-backend"
   cpu                      = "256"
@@ -264,9 +264,9 @@ resource "aws_ecs_task_definition" "backend" {
   }])
 }
 
-# The backend service: BackendService in app-ecs.yaml. The frontend service's
-# settings, with three differences: a second security group, ECS Exec, and the
-# /api/* rule in depends_on instead of the listener.
+# The backend service. The frontend service's settings, with three
+# differences: a second security group, ECS Exec, and the /api/* rule in
+# depends_on instead of the listener.
 #
 # The name keeps CloudFormation's form: CD's locate step (cd.yml:97) finds the
 # service by the substring 'login-demo-app-BackendService' and skips the deploy
