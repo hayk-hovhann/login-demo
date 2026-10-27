@@ -2,20 +2,21 @@
 # Open a local port onto the private RDS instance via SSM port-forwarding through
 # the bastion — and mint short-lived IAM auth tokens so no password is handled.
 #
-# Why a script: the endpoint, the instance id, and the DbiResourceId are all
-# regenerated every time `data` is restored from a snapshot, so anything written
-# down goes stale within a session. These are resolved from stack exports at run
-# time instead.
+# Why a script: the bastion's instance id and the database's DbiResourceId are
+# regenerated with every rebuild or snapshot restore, so anything written down
+# goes stale within a session. Everything is resolved at run time instead: the
+# database's address from the data layer's SSM parameters, the bastion from its
+# stack's output.
 #
 #   ./infra/db-tunnel.sh          # open the tunnel (blocks until Ctrl-C)
 #   ./infra/db-tunnel.sh token    # print a fresh 15-minute auth token, exit
 #   ./infra/db-tunnel.sh psql     # open a psql shell through an already-open tunnel
 #
-# LOCAL_PORT overrides the local end (default 5432). Stack names can be
-# overridden by env var if you deploy under different names.
+# LOCAL_PORT overrides the local end (default 5432). The data layer's parameter
+# path and the bastion stack name can be overridden by env var.
 set -euo pipefail
 
-DATA_STACK="${DATA_STACK:-login-demo-data}"
+DATA_PARAMETER_PATH="${DATA_PARAMETER_PATH:-/login-demo/data}"
 BASTION_STACK="${BASTION_STACK:-login-demo-bastion}"
 LOCAL_PORT="${LOCAL_PORT:-5432}"
 DB_USER="${DB_USER:-dbadmin_iam}"
@@ -23,14 +24,14 @@ REGION="${AWS_REGION:-us-east-1}"
 
 die() { echo "error: $*" >&2; exit 1; }
 
-# list-exports returns empty (not an error) for a missing name, so check each one.
-export_value() {
+# One of the data layer's published outputs (infra/terraform/data/parameters.tf).
+# A missing parameter is an error: get-parameter exits non-zero with
+# ParameterNotFound, so no empty-string check is needed.
+data_param() {
   local name="$1" value
-  value=$(aws cloudformation list-exports \
-            --query "Exports[?Name=='${name}'].Value" --output text)
-  if [ -z "$value" ] || [ "$value" = "None" ]; then
-    die "export '${name}' not found — is ${DATA_STACK} deployed?"
-  fi
+  value=$(aws ssm get-parameter --name "${DATA_PARAMETER_PATH}/${name}" \
+            --query Parameter.Value --output text) \
+    || die "parameter '${DATA_PARAMETER_PATH}/${name}' not found — has data been applied?"
   echo "$value"
 }
 
@@ -53,9 +54,9 @@ mint_token() {
     --region "$REGION" --username "$DB_USER"
 }
 
-DB_HOST=$(export_value "${DATA_STACK}-DbEndpoint")
-DB_PORT=$(export_value "${DATA_STACK}-DbPort")
-DB_NAME=$(export_value "${DATA_STACK}-DbName")
+DB_HOST=$(data_param db_host)
+DB_PORT=$(data_param db_port)
+DB_NAME=$(data_param db_name)
 
 case "${1:-tunnel}" in
   token)

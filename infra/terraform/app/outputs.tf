@@ -52,6 +52,12 @@ output "dashboard_url" {
   value       = "https://console.aws.amazon.com/cloudwatch/home?region=${data.aws_region.current.region}#dashboards:name=${aws_cloudwatch_dashboard.main.dashboard_name}"
 }
 
+# run-migration.sh attaches it beside the DB badge, which has no egress.
+output "migrate_security_group_id" {
+  description = "Main security group of the one-shot migration task: outbound only."
+  value       = aws_security_group.migrate.id
+}
+
 # run-migration.sh reads it to tail the migration's logs.
 output "migrate_log_group_name" {
   description = "CloudWatch log group the one-shot migration task writes to."

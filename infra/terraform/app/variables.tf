@@ -4,10 +4,10 @@ variable "network_stack_name" {
   default     = "login-demo-network"
 }
 
-variable "data_stack_name" {
-  description = "CloudFormation stack whose <name>-DbEndpoint / -DbPort / -DbName / -DbSecretArn / -DbClientSgId exports this config reads."
+variable "data_parameter_path" {
+  description = "SSM Parameter Store path the data config publishes its outputs under (its var.parameter_path)."
   type        = string
-  default     = "login-demo-data"
+  default     = "/login-demo/data"
 }
 
 variable "app_name" {
