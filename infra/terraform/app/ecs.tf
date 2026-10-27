@@ -3,7 +3,7 @@
 # in it are what bill.
 #
 # The name keeps CloudFormation's capital C, unlike every other name here,
-# because CD's locate step (cd.yml:115, :242) finds the cluster by the
+# because CD's locate step (cd.yml:116, :243) finds the cluster by the
 # case-sensitive substring 'login-demo-app-Cluster', and skips the deploy
 # silently if nothing matches. run-migration.sh and the dashboard read the name
 # from here instead.
@@ -11,15 +11,15 @@ resource "aws_ecs_cluster" "main" {
   name = "${var.app_name}-Cluster"
 }
 
-# ci-ecr-oidc.yaml outputs the repo URIs but does not export them, so each repo
-# is looked up by name. If one is gone, plan fails here rather than a task
-# failing to pull later.
+# The repos belong to infra/terraform/ci-ecr, which publishes nothing for other
+# configs to read, so each repo is looked up by name. If one is gone, plan
+# fails here rather than a task failing to pull later.
 data "aws_ecr_repository" "frontend" {
   name = "login-demo-frontend"
 }
 
 # One repo, two images: the backend under <tag>, the Dockerfile's migrate stage
-# under migrate-<tag> (cd.yml:82).
+# under migrate-<tag> (cd.yml:83).
 data "aws_ecr_repository" "backend" {
   name = "login-demo-backend"
 }
@@ -71,7 +71,7 @@ resource "aws_ecs_task_definition" "frontend" {
 # its tasks are what bill.
 #
 # The name keeps CloudFormation's form for the same reason as the cluster's:
-# CD's locate step (cd.yml:224) finds the service by the substring
+# CD's locate step (cd.yml:225) finds the service by the substring
 # 'login-demo-app-FrontendService' and skips the deploy silently if nothing
 # matches.
 resource "aws_ecs_service" "frontend" {
@@ -132,10 +132,10 @@ resource "aws_ecs_service" "frontend" {
   }
 
   # Two writers on one field. CD points the service at a new revision on every
-  # deploy (cd.yml:302); without this, the next apply would point it back at
+  # deploy (cd.yml:303); without this, the next apply would point it back at
   # Terraform's. The price: once the service exists, an edit to the task
   # definition above does not reach the tasks at apply. It waits for CD's next
-  # deploy, which copies the family's latest revision (cd.yml:282), so it picks
+  # deploy, which copies the family's latest revision (cd.yml:283), so it picks
   # the edit up. The field is read only when the service is created.
   lifecycle {
     ignore_changes = [task_definition]
@@ -195,7 +195,7 @@ resource "aws_ecs_task_definition" "migrate" {
 # The backend task definition. The frontend's shape plus what the API needs to
 # reach Postgres and Redis and to sign sessions. Same two-writer story as the
 # frontend: CD copies the family's latest revision on every backend deploy
-# (cd.yml:155).
+# (cd.yml:156).
 resource "aws_ecs_task_definition" "backend" {
   family                   = "${var.app_name}-backend"
   cpu                      = "256"
@@ -268,7 +268,7 @@ resource "aws_ecs_task_definition" "backend" {
 # differences: a second security group, ECS Exec, and the /api/* rule in
 # depends_on instead of the listener.
 #
-# The name keeps CloudFormation's form: CD's locate step (cd.yml:97) finds the
+# The name keeps CloudFormation's form: CD's locate step (cd.yml:98) finds the
 # service by the substring 'login-demo-app-BackendService' and skips the deploy
 # silently if nothing matches.
 resource "aws_ecs_service" "backend" {
@@ -331,7 +331,7 @@ resource "aws_ecs_service" "backend" {
   }
 
   # Two writers on one field, as on the frontend: CD owns the revision after
-  # create (cd.yml:170).
+  # create (cd.yml:171).
   lifecycle {
     ignore_changes = [task_definition]
   }
