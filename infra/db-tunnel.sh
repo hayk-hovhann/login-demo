@@ -6,18 +6,18 @@
 # regenerated with every rebuild or snapshot restore, so anything written down
 # goes stale within a session. Everything is resolved at run time instead: the
 # database's address from the data layer's SSM parameters, the bastion from its
-# stack's output.
+# Terraform output.
 #
 #   ./infra/db-tunnel.sh          # open the tunnel (blocks until Ctrl-C)
 #   ./infra/db-tunnel.sh token    # print a fresh 15-minute auth token, exit
 #   ./infra/db-tunnel.sh psql     # open a psql shell through an already-open tunnel
 #
 # LOCAL_PORT overrides the local end (default 5432). The data layer's parameter
-# path and the bastion stack name can be overridden by env var.
+# path and the bastion's Terraform directory can be overridden by env var.
 set -euo pipefail
 
 DATA_PARAMETER_PATH="${DATA_PARAMETER_PATH:-/login-demo/data}"
-BASTION_STACK="${BASTION_STACK:-login-demo-bastion}"
+BASTION_TF_DIR="${BASTION_TF_DIR:-$(dirname "$0")/terraform/bastion}"
 LOCAL_PORT="${LOCAL_PORT:-5432}"
 DB_USER="${DB_USER:-dbadmin_iam}"
 REGION="${AWS_REGION:-us-east-1}"
@@ -35,13 +35,12 @@ data_param() {
   echo "$value"
 }
 
-stack_output() {
-  local stack="$1" name="$2" value
-  value=$(aws cloudformation describe-stacks --stack-name "$stack" \
-            --query "Stacks[0].Outputs[?OutputKey=='${name}'].OutputValue" --output text 2>/dev/null || true)
-  if [ -z "$value" ] || [ "$value" = "None" ]; then
-    die "output '${name}' not found on ${stack} — is it deployed?"
-  fi
+# A missing output is an error: terraform exits non-zero and prints its own
+# message, so no empty-string check is needed.
+tf_output() {
+  local dir="$1" name="$2" value
+  value=$(terraform -chdir="$dir" output -raw "$name") \
+    || die "output '${name}' not found in ${dir} — has it been applied?"
   echo "$value"
 }
 
@@ -79,7 +78,7 @@ case "${1:-tunnel}" in
   *) die "unknown mode '${1}' — use: tunnel | token | psql" ;;
 esac
 
-BASTION_ID=$(stack_output "$BASTION_STACK" BastionInstanceId)
+BASTION_ID=$(tf_output "$BASTION_TF_DIR" instance_id)
 
 # A bastion whose SSM agent has not registered yet fails as an opaque
 # TargetNotConnected; check first so the message says what is actually wrong.
