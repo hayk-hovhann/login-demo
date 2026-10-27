@@ -6,37 +6,38 @@
 # Sibling of db-tunnel.sh and deliberately much shorter: Redis here has no
 # password and no TLS, because in-VPC reachability IS the security boundary.
 # There is no token to mint — being admitted to 6379 is the whole authorization
-# story, which is exactly why the bastion needs the app stack's Redis client SG.
+# story, which is exactly why the bastion needs the app's Redis client group:
+# apply it with -var redis_client_security_group_id=... (see its variables.tf).
 #
 #   ./infra/redis-tunnel.sh          # open the tunnel (blocks until Ctrl-C)
 #   ./infra/redis-tunnel.sh cli      # redis-cli through an already-open tunnel
 #
-# LOCAL_PORT overrides the local end (default 6379). Stack names can be
-# overridden by env var if you deploy under different names.
+# LOCAL_PORT overrides the local end (default 6379). The app's and the
+# bastion's Terraform directories can be overridden by env var.
 set -euo pipefail
 
-APP_STACK="${APP_STACK:-login-demo-app}"
-BASTION_STACK="${BASTION_STACK:-login-demo-bastion}"
+APP_TF_DIR="${APP_TF_DIR:-$(dirname "$0")/terraform/app}"
+BASTION_TF_DIR="${BASTION_TF_DIR:-$(dirname "$0")/terraform/bastion}"
 LOCAL_PORT="${LOCAL_PORT:-6379}"
 
 die() { echo "error: $*" >&2; exit 1; }
 
-stack_output() {
-  local stack="$1" name="$2" value
-  value=$(aws cloudformation describe-stacks --stack-name "$stack" \
-            --query "Stacks[0].Outputs[?OutputKey=='${name}'].OutputValue" --output text 2>/dev/null || true)
-  if [ -z "$value" ] || [ "$value" = "None" ]; then
-    die "output '${name}' not found on ${stack} — is it deployed?"
-  fi
+# A missing output is an error: terraform exits non-zero and prints its own
+# message, so no empty-string check is needed.
+tf_output() {
+  local dir="$1" name="$2" value
+  value=$(terraform -chdir="$dir" output -raw "$name") \
+    || die "output '${name}' not found in ${dir} — has it been applied?"
   echo "$value"
 }
 
-# RedisEndpoint is a single host:port output, not two exports like the DB's.
-REDIS_ENDPOINT=$(stack_output "$APP_STACK" RedisEndpoint)
+# redis_endpoint is a single host:port output, unlike the DB's separate
+# host and port parameters.
+REDIS_ENDPOINT=$(tf_output "$APP_TF_DIR" redis_endpoint)
 REDIS_HOST="${REDIS_ENDPOINT%:*}"
 REDIS_PORT="${REDIS_ENDPOINT##*:}"
 [ -n "$REDIS_HOST" ] && [ "$REDIS_HOST" != "$REDIS_ENDPOINT" ] \
-  || die "could not split host:port out of RedisEndpoint='${REDIS_ENDPOINT}'"
+  || die "could not split host:port out of redis_endpoint='${REDIS_ENDPOINT}'"
 
 case "${1:-tunnel}" in
   cli)
@@ -51,7 +52,7 @@ case "${1:-tunnel}" in
   *) die "unknown mode '${1}' — use: tunnel | cli" ;;
 esac
 
-BASTION_ID=$(stack_output "$BASTION_STACK" BastionInstanceId)
+BASTION_ID=$(tf_output "$BASTION_TF_DIR" instance_id)
 
 # A bastion whose SSM agent has not registered yet fails as an opaque
 # TargetNotConnected; check first so the message says what is actually wrong.

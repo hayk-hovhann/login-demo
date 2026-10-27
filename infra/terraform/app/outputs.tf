@@ -19,8 +19,8 @@ output "cluster_name" {
   value       = aws_ecs_cluster.main.name
 }
 
-# Terraform cannot create CloudFormation exports, so bastion.yaml takes this ID
-# as its RedisClientSgId parameter rather than importing it.
+# The bastion takes this ID as its redis_client_security_group_id variable,
+# passed with -var, when a session needs redis-tunnel.sh.
 output "redis_client_security_group_id" {
   description = "Attach to anything that needs Redis on 6379 (the bastion, for GUI tunneling)."
   value       = aws_security_group.redis_client.id
