@@ -10,7 +10,7 @@
 resource "aws_security_group" "db_client" {
   name        = "${var.data_name}-db-client"
   description = "${var.data_name}-db-client (attach to anything that needs Postgres)"
-  vpc_id      = data.aws_cloudformation_export.vpc_id.value
+  vpc_id      = local.network.vpc_id
 }
 
 # The database's own group. Postgres still wants a password, but nothing
@@ -18,7 +18,7 @@ resource "aws_security_group" "db_client" {
 resource "aws_security_group" "db" {
   name        = "${var.data_name}-db"
   description = "${var.data_name}-db"
-  vpc_id      = data.aws_cloudformation_export.vpc_id.value
+  vpc_id      = local.network.vpc_id
 }
 
 # A separate rule resource, not an inline ingress block, as in the app.

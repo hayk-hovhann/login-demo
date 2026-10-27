@@ -6,8 +6,8 @@ resource "aws_elasticache_subnet_group" "redis" {
   name        = "${var.app_name}-redis"
   description = "Subnets ElastiCache may place the Redis node in."
   subnet_ids = [
-    data.aws_cloudformation_export.subnet_a_id.value,
-    data.aws_cloudformation_export.subnet_b_id.value,
+    local.network.subnet_a_id,
+    local.network.subnet_b_id,
   ]
 }
 

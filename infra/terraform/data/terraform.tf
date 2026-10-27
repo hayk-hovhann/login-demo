@@ -1,8 +1,12 @@
-# The data layer: Postgres on RDS, being ported from infra/data.yaml. Its own
-# config and its own state, apart from infra/terraform/app, because the two
-# live on different clocks: the app can be destroyed and rebuilt at will, the
-# database holds the only copy of the users. Whatever shares a state file
-# shares every plan, apply and destroy, so a separate key is what keeps a
+# The data layer: Postgres on RDS. Ported from infra/data.yaml, the
+# CloudFormation template this config replaced, since removed: git show
+# 1c7b811:infra/data.yaml. A comment here that compares with CloudFormation
+# means that template, unless it names another stack.
+#
+# Its own config and its own state, apart from infra/terraform/app, because
+# the two live on different clocks: the app can be destroyed and rebuilt at
+# will, the database holds the only copy of the users. Whatever shares a state
+# file shares every plan, apply and destroy, so a separate key is what keeps a
 # destroy in app from ever reaching the database.
 terraform {
   required_version = "~> 1.16"

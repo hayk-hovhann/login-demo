@@ -12,8 +12,8 @@ resource "aws_db_subnet_group" "db" {
   name        = "${var.data_name}-db"
   description = "${var.data_name} db subnets"
   subnet_ids = [
-    data.aws_cloudformation_export.subnet_a_id.value,
-    data.aws_cloudformation_export.subnet_b_id.value,
+    local.network.subnet_a_id,
+    local.network.subnet_b_id,
   ]
 }
 
@@ -70,6 +70,11 @@ resource "aws_db_instance" "db" {
   iam_database_authentication_enabled = true
 
   backup_retention_period = 1
+
+  # The provider's default is false, which leaves every snapshot untagged,
+  # the final one included: the one resource that outlives the teardown. True
+  # copies the instance's tags, default_tags included, onto each.
+  copy_tags_to_snapshot = true
 
   # An edit lands now, not in the next maintenance window. The provider's
   # default is false, and then every plan until the window shows the edit

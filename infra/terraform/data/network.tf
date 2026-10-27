@@ -1,16 +1,16 @@
-# The network stays in CloudFormation until its own arc. Same seam as the
-# app's network.tf: its exports, read through data sources rather than
-# imported, and so not locked. The network is permanent, so the missing lock
-# costs little here.
+# The network layer's values, read from SSM Parameter Store the same way as
+# the app's network.tf. The network is permanent, so they are always there.
+data "aws_ssm_parameter" "network" {
+  for_each = toset([
+    "vpc_id",
+    "subnet_a_id",
+    "subnet_b_id",
+  ])
 
-data "aws_cloudformation_export" "vpc_id" {
-  name = "${var.network_stack_name}-VpcId"
+  name = "${var.network_parameter_path}/${each.key}"
 }
 
-data "aws_cloudformation_export" "subnet_a_id" {
-  name = "${var.network_stack_name}-SubnetAId"
-}
-
-data "aws_cloudformation_export" "subnet_b_id" {
-  name = "${var.network_stack_name}-SubnetBId"
+locals {
+  # The three values by output name: local.network.vpc_id and so on.
+  network = { for name, parameter in data.aws_ssm_parameter.network : name => parameter.insecure_value }
 }

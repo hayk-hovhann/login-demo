@@ -3,7 +3,7 @@
 resource "aws_security_group" "alb" {
   name        = "${var.app_name}-alb"
   description = "${var.app_name}-alb"
-  vpc_id      = data.aws_cloudformation_export.vpc_id.value
+  vpc_id      = local.network.vpc_id
 }
 
 # Rules are separate resources, not inline ingress blocks: the provider's
@@ -43,7 +43,7 @@ resource "aws_vpc_security_group_egress_rule" "alb_all" {
 resource "aws_security_group" "service" {
   name        = "${var.app_name}-service"
   description = "${var.app_name}-service"
-  vpc_id      = data.aws_cloudformation_export.vpc_id.value
+  vpc_id      = local.network.vpc_id
 }
 
 # 8080, not 80: the frontend image is nginx-unprivileged (non-root).
@@ -77,7 +77,7 @@ resource "aws_vpc_security_group_egress_rule" "service_all" {
 resource "aws_security_group" "migrate" {
   name        = "${var.app_name}-migrate"
   description = "${var.app_name}-migrate (one-shot migration task; outbound only)"
-  vpc_id      = data.aws_cloudformation_export.vpc_id.value
+  vpc_id      = local.network.vpc_id
 }
 
 # Same strip as service_all: ECR, Secrets Manager, CloudWatch Logs and RDS.
@@ -94,7 +94,7 @@ resource "aws_vpc_security_group_egress_rule" "migrate_all" {
 resource "aws_security_group" "redis_client" {
   name        = "${var.app_name}-redis-client"
   description = "${var.app_name}-redis-client (attach to anything that needs Redis)"
-  vpc_id      = data.aws_cloudformation_export.vpc_id.value
+  vpc_id      = local.network.vpc_id
 }
 
 # Redis's own group. No password on Redis, so these two rules are the whole
@@ -102,7 +102,7 @@ resource "aws_security_group" "redis_client" {
 resource "aws_security_group" "redis" {
   name        = "${var.app_name}-redis"
   description = "${var.app_name}-redis"
-  vpc_id      = data.aws_cloudformation_export.vpc_id.value
+  vpc_id      = local.network.vpc_id
 }
 
 resource "aws_vpc_security_group_ingress_rule" "redis_from_service" {
