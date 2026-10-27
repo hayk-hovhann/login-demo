@@ -1,7 +1,7 @@
-variable "network_stack_name" {
-  description = "CloudFormation stack whose <name>-VpcId / -SubnetAId / -SubnetBId exports this config reads."
+variable "network_parameter_path" {
+  description = "SSM Parameter Store path the network config publishes its outputs under (its var.parameter_path)."
   type        = string
-  default     = "login-demo-network"
+  default     = "/login-demo/network"
 }
 
 variable "data_name" {

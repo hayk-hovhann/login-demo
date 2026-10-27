@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'login-demo bastion — SSM-managed private t3.micro for GUI tunneling to private RDS (5432) and, when RedisClientSgId is set, ElastiCache Redis (6379). No public inbound, no SSH key. Session-scoped: create when you need GUI access, stop or delete when done. Imports the network; reads the DB client SG from SSM Parameter Store; takes the Redis client SG as a parameter.'
+Description: 'login-demo bastion — SSM-managed private t3.micro for GUI tunneling to private RDS (5432) and, when RedisClientSgId is set, ElastiCache Redis (6379). No public inbound, no SSH key. Session-scoped: create when you need GUI access, stop or delete when done. Reads the VPC, the subnet and the DB client SG from SSM Parameter Store; takes the Redis client SG as a parameter.'
 
 # ============================================================================
 # WHY THIS EXISTS
@@ -23,10 +23,18 @@ Description: 'login-demo bastion — SSM-managed private t3.micro for GUI tunnel
 # ============================================================================
 
 Parameters:
-  NetworkStackName:
-    Type: String
-    Default: 'login-demo-network'
-    Description: 'Network stack to import the VPC/subnet from.'
+  # Both resolved from SSM Parameter Store, where the Terraform network layer
+  # publishes them (infra/terraform/network/parameters.tf), the same mechanism
+  # as DbClientSgId and LatestAmiId. The network is permanent, so neither goes
+  # stale under a live bastion.
+  VpcId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::VPC::Id>'
+    Default: '/login-demo/network/vpc_id'
+    Description: 'SSM parameter holding the VPC id, published by infra/terraform/network.'
+  SubnetId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Subnet::Id>'
+    Default: '/login-demo/network/subnet_a_id'
+    Description: 'SSM parameter holding the subnet to launch in, published by infra/terraform/network.'
   # Resolved from SSM Parameter Store, where the Terraform data layer publishes
   # it (infra/terraform/data/parameters.tf): the same mechanism as LatestAmiId
   # below. CloudFormation reads it at create and at every update, never in
@@ -63,8 +71,7 @@ Resources:
     Type: 'AWS::EC2::SecurityGroup'
     Properties:
       GroupDescription: !Sub '${AWS::StackName}-bastion (no ingress; SSM outbound only)'
-      VpcId:
-        Fn::ImportValue: !Sub '${NetworkStackName}-VpcId'
+      VpcId: !Ref VpcId
 
   # Role that lets the SSM agent register + run sessions. The AWS-managed
   # AmazonSSMManagedInstanceCore policy is exactly this scope, nothing more.
@@ -99,8 +106,7 @@ Resources:
         - DeviceIndex: 0
           AssociatePublicIpAddress: true
           DeleteOnTermination: true
-          SubnetId:
-            Fn::ImportValue: !Sub '${NetworkStackName}-SubnetAId'
+          SubnetId: !Ref SubnetId
           GroupSet:
             - !Ref BastionSecurityGroup
             - !Ref DbClientSgId   # badge to reach Postgres 5432

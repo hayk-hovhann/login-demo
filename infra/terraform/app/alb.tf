@@ -15,8 +15,8 @@ resource "aws_lb" "main" {
 
   # An ALB needs at least two availability zones: one subnet in each.
   subnets = [
-    data.aws_cloudformation_export.subnet_a_id.value,
-    data.aws_cloudformation_export.subnet_b_id.value,
+    local.network.subnet_a_id,
+    local.network.subnet_b_id,
   ]
 }
 
@@ -46,7 +46,7 @@ resource "aws_lb_target_group" "main" {
   # use arn_suffix, the listener, the rule and ecs.tf use arn.
   name_prefix = each.value.name_prefix
 
-  vpc_id   = data.aws_cloudformation_export.vpc_id.value
+  vpc_id   = local.network.vpc_id
   port     = each.value.port
   protocol = "HTTP"
 

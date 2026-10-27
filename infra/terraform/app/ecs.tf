@@ -124,8 +124,8 @@ resource "aws_ecs_service" "frontend" {
   # through the internet gateway, with no NAT gateway to pay for.
   network_configuration {
     subnets = [
-      data.aws_cloudformation_export.subnet_a_id.value,
-      data.aws_cloudformation_export.subnet_b_id.value,
+      local.network.subnet_a_id,
+      local.network.subnet_b_id,
     ]
     security_groups  = [aws_security_group.service.id]
     assign_public_ip = true
@@ -316,8 +316,8 @@ resource "aws_ecs_service" "backend" {
 
   network_configuration {
     subnets = [
-      data.aws_cloudformation_export.subnet_a_id.value,
-      data.aws_cloudformation_export.subnet_b_id.value,
+      local.network.subnet_a_id,
+      local.network.subnet_b_id,
     ]
 
     # Two groups, unioned on the task's network card. service admits the ALB
