@@ -29,8 +29,9 @@ resource "aws_iam_role_policy_attachment" "task_execution_managed" {
 # references a secret fails to start with ResourceInitializationError.
 #
 # Two secrets: the session key, this config's own, and the RDS-managed master
-# secret, the data stack's DbSecretArn export. The bare secret ARN: the
-# :username:: suffix is ECS's valueFrom syntax, not part of the IAM resource.
+# secret, from the data layer's db_secret_arn parameter. The bare secret ARN:
+# the :username:: suffix is ECS's valueFrom syntax, not part of the IAM
+# resource.
 resource "aws_iam_role_policy" "task_execution_read_secrets" {
   name = "read-secrets"
   role = aws_iam_role.task_execution.name
@@ -41,7 +42,7 @@ resource "aws_iam_role_policy" "task_execution_read_secrets" {
       Action = "secretsmanager:GetSecretValue"
       Resource = [
         aws_secretsmanager_secret.session.arn,
-        data.aws_cloudformation_export.db_secret_arn.value,
+        local.db.db_secret_arn,
       ]
     }]
   })

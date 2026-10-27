@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'login-demo bastion — SSM-managed private t3.micro for GUI tunneling to private RDS (5432) and, when RedisClientSgId is set, ElastiCache Redis (6379). No public inbound, no SSH key. Session-scoped: create when you need GUI access, stop or delete when done. Imports the network + the DB client SG; takes the Redis client SG as a parameter.'
+Description: 'login-demo bastion — SSM-managed private t3.micro for GUI tunneling to private RDS (5432) and, when RedisClientSgId is set, ElastiCache Redis (6379). No public inbound, no SSH key. Session-scoped: create when you need GUI access, stop or delete when done. Imports the network; reads the DB client SG from SSM Parameter Store; takes the Redis client SG as a parameter.'
 
 # ============================================================================
 # WHY THIS EXISTS
@@ -13,7 +13,7 @@ Description: 'login-demo bastion — SSM-managed private t3.micro for GUI tunnel
 # SECURITY POSTURE
 #   - No SecurityGroupIngress at all. SSM needs none — the agent dials OUT to
 #     AWS. Nothing can connect TO this box. No SSH, no key pair.
-#   - Carries the DB client SG (imported) so it may reach Postgres on 5432,
+#   - Carries the DB client SG (from SSM) so it may reach Postgres on 5432,
 #     exactly like the backend tasks do. With RedisClientSgId set it also carries
 #     the app's Redis client SG for 6379 — a SEPARATE badge on purpose, so GUI
 #     access to one datastore never implies access to the other.
@@ -27,10 +27,16 @@ Parameters:
     Type: String
     Default: 'login-demo-network'
     Description: 'Network stack to import the VPC/subnet from.'
-  DataStackName:
-    Type: String
-    Default: 'login-demo-data'
-    Description: 'Data stack to import the DB client SG from (grants Postgres reach).'
+  # Resolved from SSM Parameter Store, where the Terraform data layer publishes
+  # it (infra/terraform/data/parameters.tf): the same mechanism as LatestAmiId
+  # below. CloudFormation reads it at create and at every update, never in
+  # between, so a data rebuilt under a live bastion needs a stack update to be
+  # reached. Nothing locks data while the bastion runs: tear the bastion down
+  # first.
+  DbClientSgId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::SecurityGroup::Id>'
+    Default: '/login-demo/data/db_client_security_group_id'
+    Description: 'SSM parameter holding the DB client SG (grants Postgres reach), published by infra/terraform/data.'
   # A parameter, not an ImportValue: the app is Terraform's now, and Terraform
   # cannot create CloudFormation exports. String rather than
   # AWS::EC2::SecurityGroup::Id, which would reject the empty default; the
@@ -97,7 +103,7 @@ Resources:
             Fn::ImportValue: !Sub '${NetworkStackName}-SubnetAId'
           GroupSet:
             - !Ref BastionSecurityGroup
-            - Fn::ImportValue: !Sub '${DataStackName}-DbClientSgId'   # badge to reach Postgres 5432
+            - !Ref DbClientSgId   # badge to reach Postgres 5432
             # AWS::NoValue drops the element entirely when RedisClientSgId is
             # empty — an "" left in GroupSet would fail the instance.
             - !If

@@ -71,6 +71,22 @@ resource "aws_vpc_security_group_egress_rule" "service_all" {
   ip_protocol       = "-1"
 }
 
+# The migration task's main group, worn beside the data layer's DB badge. The
+# badge carries no egress, so without this the task has no outbound at all and
+# dies fetching the DB secret. No ingress: a one-shot task accepts nothing.
+resource "aws_security_group" "migrate" {
+  name        = "${var.app_name}-migrate"
+  description = "${var.app_name}-migrate (one-shot migration task; outbound only)"
+  vpc_id      = data.aws_cloudformation_export.vpc_id.value
+}
+
+# Same strip as service_all: ECR, Secrets Manager, CloudWatch Logs and RDS.
+resource "aws_vpc_security_group_egress_rule" "migrate_all" {
+  security_group_id = aws_security_group.migrate.id
+  cidr_ipv4         = "0.0.0.0/0"
+  ip_protocol       = "-1"
+}
+
 # The badge: no rules at all. Wearing it is what redis_from_client admits on
 # 6379. No egress either: a network interface gets the union of all its
 # groups' rules, so the wearer's main group supplies outbound. CloudFormation

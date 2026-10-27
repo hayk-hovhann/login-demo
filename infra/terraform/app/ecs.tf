@@ -322,10 +322,10 @@ resource "aws_ecs_service" "backend" {
 
     # Two groups, unioned on the task's network card. service admits the ALB
     # on 3000 and is what Redis admits on 6379. The db client group is the
-    # data stack's empty badge, the one the DB's own group admits on 5432.
+    # data layer's empty badge, the one the DB's own group admits on 5432.
     security_groups = [
       aws_security_group.service.id,
-      data.aws_cloudformation_export.db_client_sg_id.value,
+      local.db.db_client_security_group_id,
     ]
     assign_public_ip = true
   }
