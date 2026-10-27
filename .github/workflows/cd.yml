@@ -9,7 +9,8 @@ name: CD
 #   - each then deploys to ECS: locate the running service, register a new
 #     SHA-pinned task def, roll the service. Skips gracefully if the ephemeral
 #     app stack is torn down.
-#   - infra has no CD (cfn templates are deployed manually via `cloudformation deploy`).
+#   - infra has no CD (the Terraform configs and the remaining CloudFormation
+#     templates are applied by hand).
 #
 # Both services are now symmetric: push + deploy. (Backend was push-only until
 # the backend-deploy job below was added — a backend change reached production
@@ -76,8 +77,8 @@ jobs:
           docker build -t "$REGISTRY/$REPO:$SHA" -t "$REGISTRY/$REPO:latest" ./backend
           # Migration image: same repo, migrate- tag prefix, so ci-ecr (permanent)
           # needs no change — ecr:PutImage is scoped to the repo ARN, all tags.
-          # MigrateTaskDefinition pulls migrate-${BackendImageTag}, keeping schema
-          # and code on the same commit.
+          # The migrate task definition pulls migrate-<backend_image_tag>, keeping
+          # schema and code on the same commit.
           docker build --target migrate \
             -t "$REGISTRY/$REPO:migrate-$SHA" -t "$REGISTRY/$REPO:migrate-latest" ./backend
           docker push "$REGISTRY/$REPO:$SHA"
